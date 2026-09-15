@@ -85,18 +85,24 @@ def main() -> int:
     result = run_funnel(apply_rules(ledger, screener=rule_screener))
     kept_ids = set(result.flagged["transaction_id"])
     predicted = ledger["transaction_id"].isin(kept_ids)
+    legacy_predicted = legacy_pipeline(ledger)
 
     print("\n" + "=" * 66)
     print(f"FUNNEL EVALUATION  ({len(ledger):,} rows, {int(truth.sum())} labelled laundering)")
     print("=" * 66)
 
-    print(f"\n{'pattern':<16}{'total':>7}{'caught':>8}{'recall':>9}")
+    print(f"\n{'pattern':<16}{'total':>7}{'caught':>8}{'recall':>9}   (current pipeline)")
     for pattern, group in ledger.groupby("pattern"):
         caught = predicted[group.index]
         print(f"{pattern:<16}{len(group):>7}{int(caught.sum()):>8}{caught.mean():>8.0%}")
 
+    print(f"\n{'pattern':<16}{'total':>7}{'caught':>8}{'recall':>9}   (original pipeline, for comparison)")
+    for pattern, group in ledger.groupby("pattern"):
+        caught = legacy_predicted[group.index]
+        print(f"{pattern:<16}{len(group):>7}{int(caught.sum()):>8}{caught.mean():>8.0%}")
+
     current = metrics(truth, predicted)
-    legacy = metrics(truth, legacy_pipeline(ledger))
+    legacy = metrics(truth, legacy_predicted)
 
     print(f"\n{'':<14}{'recall':>9}{'precision':>11}{'F1':>8}{'forwarded':>11}")
     for name, m, fwd in (

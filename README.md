@@ -37,7 +37,10 @@ these exact numbers:
 
 Per typology, the original caught 0 of 10 structuring legs, 0 of 6 sanctioned
 transfers, and 0 of 11 fan-in collections. It caught the circular-flow set only
-because those transfers happened to exceed $10,000.
+because those transfers happened to exceed $10,000. `scripts/evaluate.py` prints
+this breakdown for both pipelines side by side, so these per-typology numbers
+are reproducible from the same command as the table above, not just the
+aggregate recall/precision/F1.
 
 ## Architecture
 
@@ -50,20 +53,27 @@ graph TD
     D -->|anomalous| F
     D -->|normal| E[Dropped, logged]
     F --> G[Tier 2: RAG compliance assessment<br/>structured verdict]
-    G -->|SUSPICIOUS / ERROR| H[Tier 3: LangGraph topology agent]
-    G -->|CLEAR| E
-    H --> I{Score >= HITL threshold?}
+    G --> N[Investigative ledger<br/>every verdict recorded: SUSPICIOUS / CLEAR / ERROR]
+    N -->|analyst selects any flagged row| H[Tier 3: LangGraph topology agent]
+    H --> I{Topology score >= 70?}
     I -->|yes| J[Execution pauses]
     J -->|approve| K[SAR generation]
     J -->|reject| L[Escalate, no filing]
     I -->|no| K
     K --> M[Durable audit trail]
     L --> M
+    N --> M
 ```
+
+Tier 3 is not automatically gated on the Tier 2 verdict: every assessed row, whatever
+its verdict, lands in the investigative ledger, and the analyst manually picks any
+one of them to run the topology agent — a CLEAR-verdicted row can still be sent
+through it.
 
 **Tier 1, deterministic rules** (`utils/rules.py`). Reporting threshold, the
 structuring band below it, high-risk and secrecy jurisdictions, sanctions
-screening, and unidentified counterparties. Runs first; a hit is binding.
+screening (RapidFuzz fuzzy name match, flags at 88% similarity or above), and
+unidentified counterparties. Runs first; a hit is binding.
 
 **Tier 0, behavioural funnel** (`utils/funnel.py`, `utils/features.py`). Twelve
 features describing how an account behaves across the batch — per-sender
@@ -82,9 +92,9 @@ flows, account velocity, and beneficiary obfuscation. Scoring is per unique
 counterparty and capped, so the result reflects network shape rather than how
 many rows were uploaded.
 
-**Human review.** LangGraph's `interrupt_before` suspends execution. Approval
-records the officer, timestamp, decision, and note; rejection routes to
-escalation and produces no filing.
+**Human review.** A topology score of 70 or above (out of 100) pauses execution
+via LangGraph's `interrupt_before`. Approval records the officer, timestamp,
+decision, and note; rejection routes to escalation and produces no filing.
 
 ## Requirements
 
@@ -96,7 +106,7 @@ it does mean the first install is slower and briefly pulls build tooling.
 ## Setup
 
 ```bash
-git clone <your-repo-url> && cd fintech-fraud-auditor
+git clone https://github.com/vinaykumar101997/Fintech-Fraud-Agent-Pro.git && cd Fintech-Fraud-Agent-Pro
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
@@ -156,7 +166,7 @@ python -m utils.chat_agent              # interactive corpus query
 | Risk score | `+50` per matching row, no dedup or cap; five rows scored 250 | Per unique counterparty, capped, clamped |
 | Graph state | Nodes mutated checkpointed state in place | Copy before mutate |
 | HITL | Approval node was `lambda state: state` | Records officer, timestamp, decision; rejection path added |
-| Sessions | One global graph, thread IDs from transaction IDs | Session-scoped graph and namespaced threads |
+| Sessions | One global graph, thread IDs from transaction IDs | Shared graph, session-namespaced threads |
 | Singleton | Cached a half-built object when init failed | Assign only after success |
 | Money | `float()` on `"$50,000"` raised | `Decimal` throughout, currency parser at the boundary |
 | Input validation | Missing columns raised raw `KeyError` | Schema check with actionable messages |
@@ -192,3 +202,7 @@ This is a prototype and the following are real gaps, not oversights:
 - Postgres checkpointer and audit log
 - Full-ledger network construction for the topology tier
 - Analyst feedback loop to tune thresholds against confirmed outcomes
+
+## License
+
+[MIT](LICENSE)
