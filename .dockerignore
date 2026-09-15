@@ -1,0 +1,37 @@
+# Credentials. COPY . . previously baked these into an image layer.
+.env
+.env.*
+!.env.example
+*.json
+!package.json
+gcp-key*.json
+service-account*.json
+credentials*.json
+*.pem
+*.key
+.aws/
+aws-credentials*
+*.tfstate
+*.tfstate.backup
+
+# VCS and local environments
+.git
+.gitignore
+.venv
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# Local data and audit databases
+data/*.sqlite3
+data/*.csv
+data/*.pdf
+!data/sanctions_list.csv
+
+# Docs and tests
+tests/
+*.md
+!README.md

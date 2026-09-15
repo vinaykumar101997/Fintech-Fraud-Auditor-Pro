@@ -1,0 +1,11 @@
+name,aliases,type,program
+Vladimir Putin,Vladimir Vladimirovich Putin|PUTIN Vladimir|Putin V.V.,PEP,RUSSIA-EO14024
+Kim Jong Un,Kim Jong-un|KIM Jong Un|Kim Jong Woon,PEP,DPRK
+Lazarus Group,APT38|Hidden Cobra|Guardians of Peace|ZINC,Entity,DPRK-CYBER
+Sinaloa Cartel,Cartel de Sinaloa|CDS|Guzman Loera Organization,Entity,SDNTK
+Viktor Bout,Viktor Anatolyevich Bout|BOUT Viktor|Vadim Markovich Aminov,Individual,MERCHANT-OF-DEATH
+Tornado Cash,TornadoCash|Tornado.Cash,Entity,CYBER2
+Bank Melli Iran,Melli Bank|BANK MELLI,Entity,IRAN
+Wagner Group,PMC Wagner|ChVK Wagner|Liga,Entity,RUSSIA-EO14024
+Halcyon Trading,Halcyon Trading Ltd|HALCYON TRD,Entity,DEMO-SYNTHETIC
+Kestrel Imports,Kestrel Imports LLC|KESTREL IMP,Entity,DEMO-SYNTHETIC

@@ -1,0 +1,59 @@
+# --- Core application framework ---
+streamlit==1.56.0
+python-dotenv==1.2.2
+pandas==3.0.2
+watchdog==6.0.0            # Streamlit file-watching on save
+
+# --- AI and stateful orchestration ---
+# This whole block is a tightly mutually-versioned cluster. Exact pins here
+# went stale (langchain-aws 0.2.10 needed langchain-core<0.4, incompatible
+# with the 1.x line everything else needs) and reproduced a ResolutionImpossible
+# on a fresh install. Pinned to the minimum version each package needs from its
+# neighbours, with an upper bound, so pip can pick mutually-compatible patch
+# releases instead of an exact snapshot that will drift out of sync again.
+langchain>=1.2.15,<2.0.0
+langchain-core>=1.6.0,<2.0.0
+langchain-community>=0.4.1,<0.5.0
+langchain-classic>=1.0.4,<2.0.0
+langchain-text-splitters>=1.1.2,<2.0.0   # was imported by the ingestion script but never declared
+langgraph>=1.1.5,<2.0.0
+langchain-qdrant>=1.1.0,<2.0.0
+
+# --- Model provider: AWS Bedrock (default) ---
+# Set MODEL_PROVIDER=bedrock in .env. Chat model must support tool use, because
+# verdicts come back through with_structured_output.
+langchain-aws>=1.7.6,<2.0.0
+boto3>=1.43.64                    # langchain-aws 1.7.6 needs boto3>=1.43.64
+
+# --- Model provider: Google Vertex AI (alternative, NOT installed) ---
+# This project runs on AWS Bedrock. Google is only reachable via
+# MODEL_PROVIDER=vertex, and its imports in utils/llm_provider.py are lazy, so
+# nothing here is needed. To use Vertex instead, uncomment both lines below.
+# langchain-google-vertexai==3.2.2
+# google-cloud-aiplatform==1.148.1
+
+# --- Machine learning (Tier 0) ---
+scikit-learn==1.8.0
+numpy==2.4.4
+
+# --- Vector database and embeddings ---
+qdrant-client==1.17.1
+
+# --- Reporting and visualisation ---
+plotly==6.7.0
+PyMuPDF==1.27.2.2
+
+# --- Utilities ---
+pydantic==2.13.2
+rapidfuzz==3.6.1
+
+# --- Development ---
+pytest==8.3.4
+
+# Removed: supabase, weasyprint, httpx, cryptography.
+# None were imported anywhere. weasyprint additionally needs libpango, libcairo
+# and libgdk-pixbuf, which the image did not install, so it would have failed
+# on import had anything used it.
+#
+# For durable HITL checkpoints in production, add:
+#   langgraph-checkpoint-postgres

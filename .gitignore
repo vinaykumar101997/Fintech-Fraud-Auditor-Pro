@@ -1,0 +1,18 @@
+.env
+*.json
+!package.json
+gcp-key*.json
+.aws/
+*.tfstate
+*.tfstate.*
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+data/*.sqlite3
+data/*.pdf
+data/sample_ledger*.csv
+data/*.joblib
+
+# Local Qdrant volume (docker run -v $(pwd)/qdrant_storage:/qdrant/storage)
+qdrant_storage/
