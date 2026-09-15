@@ -10,9 +10,12 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 data/*.sqlite3
+data/*.db
 data/*.pdf
-data/sample_ledger*.csv
+data/*.csv
 data/*.joblib
 
 # Local Qdrant volume (docker run -v $(pwd)/qdrant_storage:/qdrant/storage)
 qdrant_storage/
+eval/
+docs/INTERVIEW_PREP.md

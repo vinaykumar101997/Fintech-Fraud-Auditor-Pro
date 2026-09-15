@@ -4,13 +4,24 @@ Produces `data/sample_ledger.csv` (no label column, for the app) and
 `data/sample_ledger_labelled.csv` (with `is_laundering` and `pattern`, for the
 evaluation harness). Patterns injected:
 
-  structuring  - one sender splits a large sum into legs just under $10k
-  circular     - funds leave an account and return through intermediaries
-  sanctioned   - ordinary-sized transfers to a high-risk jurisdiction
-  fan_in       - many senders converge on one collection account
+  structuring    - one sender splits a large sum into legs just under $10k
+  circular       - funds leave an account and return through intermediaries,
+                   in legs large enough to trip the reporting threshold
+  circular_small       - the same shape, in rings of 3-4 accounts, but every
+                         leg is $3,000-$7,000 - below the structuring band,
+                         so no rule threshold reaches it
+  circular_camouflaged - the same ring shape again, but built from businesses
+                         that already have ordinary repeat activity in the
+                         "clean" background, at the same amount distribution
+                         as that background traffic, spread over ~10 days
+  sanctioned           - ordinary-sized transfers to a high-risk jurisdiction
+  fan_in               - many senders converge on one collection account
 
-The structuring and sanctioned patterns are deliberately *small in value*.
-They are the cases an amount-only funnel discards.
+The structuring, sanctioned, and circular_small patterns are deliberately
+*small in value*. They are the cases an amount-only funnel discards.
+circular_camouflaged is deliberately indistinguishable from the background on
+amount, account age, and per-account volume - see the README for whether
+Tier 0 catches it and what that does and does not prove.
 """
 
 from __future__ import annotations
@@ -76,6 +87,38 @@ def generate(n_clean: int = 420, seed: int = 7):
     for i in range(6):
         add(f"SAN-{i:03d}", "Kestrel Imports", "Unknown_Entity", round(rng.uniform(300, 1400), 2),
             rng.choice(["Russia", "Iran", "North Korea"]), ts + timedelta(hours=i * 5), True, "sanctioned")
+
+    # --- Circular flow (small): rings of 3-4 accounts, legs below the
+    # structuring band. Unlike the pattern above, no leg here exceeds any
+    # rule threshold - only a feature that recognises the cycle itself,
+    # rather than the amount, could catch this one. ---
+    ts = start + timedelta(days=18)
+    for ring in range(rng.randint(2, 3)):
+        size = rng.randint(3, 4)
+        accounts = [f"Loop{ring}-{j}" for j in range(size)]
+        for i in range(size):
+            amount = round(rng.uniform(3000, 7000), 2)
+            add(f"CIRS-{ring}-{i:02d}", accounts[i], accounts[(i + 1) % size], amount,
+                rng.choice(CLEAN_COUNTRIES), ts + timedelta(hours=i * 6), True, "circular_small")
+        ts += timedelta(days=2)
+
+    # --- Circular flow (camouflaged): the same ring shape, but built from
+    # businesses that already appear throughout the "clean" background with
+    # normal repeat activity, at that same amount distribution, spread over
+    # ~10 days rather than clustered hours. Nothing here is statistically new
+    # about the accounts themselves - only the ring structure is - and Tier 0
+    # has no feature that looks at structure. ---
+    ts = start + timedelta(days=25)
+    for ring in range(2):
+        size = rng.randint(3, 4)
+        accounts = rng.sample(BUSINESSES, size)
+        for i in range(size):
+            amount = round(rng.lognormvariate(6.6, 1.05), 2)
+            add(f"CIRC-{ring}-{i:02d}", accounts[i], accounts[(i + 1) % size], amount,
+                rng.choice(CLEAN_COUNTRIES),
+                ts + timedelta(days=i * 2, hours=rng.randint(0, 12)),
+                True, "circular_camouflaged")
+        ts += timedelta(days=10)
 
     # --- Fan-in: eleven senders converge on one account ---
     ts = start + timedelta(days=15)
