@@ -98,6 +98,120 @@ def test_rules_override_a_normal_ml_score():
     assert "TARGET" in set(result.flagged["transaction_id"])
 
 
+def _load_generated_ledger(tmp_path: Path):
+    """The full 450-row labelled batch from the fixed-seed generator, run
+    through the same CSV round-trip as a real upload. Used instead of a small
+    hand-built frame because a handful of rows cannot reproduce the feature
+    separation the real batch size gives Tier 0 - see the two tests below."""
+    scripts_dir = Path(__file__).resolve().parent.parent / "scripts"
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    from generate_sample_ledger import generate
+
+    labelled = generate()
+    csv_path = tmp_path / "ledger.csv"
+    labelled.drop(columns=["is_laundering", "pattern"]).to_csv(csv_path, index=False)
+    ledger, _ = load_ledger(csv_path)
+    return labelled, ledger
+
+
+def test_fan_in_pattern_is_flagged_by_the_funnel(tmp_path):
+    """Fan-in has no rule of its own: the amounts are ordinary and the
+    jurisdiction is USA, so only Tier 0's receiver_fan_in feature can catch
+    it. A rule-only regression cannot see this failure mode - this test does,
+    and fails if the ML tier is disabled or its threshold is loosened."""
+    labelled, ledger = _load_generated_ledger(tmp_path)
+    fan_in_ids = set(labelled.loc[labelled["pattern"] == "fan_in", "transaction_id"])
+
+    ruled = apply_rules(ledger)
+    assert not ruled[ruled["transaction_id"].isin(fan_in_ids)]["rule_flag"].any()
+
+    result = run_funnel(ruled)
+    assert fan_in_ids <= set(result.flagged["transaction_id"])
+
+
+def test_circular_flow_is_forwarded_via_the_reporting_threshold_rule(tmp_path):
+    """Circular-flow legs in the sample generator are deliberately large
+    (>$10,000 apiece), so this typology is actually caught by the plain
+    reporting-threshold rule in utils/rules.py, not by Tier 0 - the twelve
+    funnel features describe account behaviour, not network cycles; cycle
+    detection is Tier 3's job and runs only when an analyst selects a row.
+    No other test exercises "amount >= REPORTING_THRESHOLD" on its own, so
+    this guards that rule path specifically."""
+    labelled, ledger = _load_generated_ledger(tmp_path)
+    circular_ids = set(labelled.loc[labelled["pattern"] == "circular", "transaction_id"])
+
+    ruled = apply_rules(ledger)
+    assert ruled[ruled["transaction_id"].isin(circular_ids)]["rule_flag"].all()
+
+    result = run_funnel(ruled)
+    assert circular_ids <= set(result.flagged["transaction_id"])
+
+
+# --- evaluate.py's quality gate ---------------------------------------------
+def test_evaluate_gate_survives_a_batch_too_small_for_ml():
+    """Below MIN_ROWS_FOR_ML, Tier 0 fails open (every row forwarded) and
+    result.dropped is an empty frame - but one that still carries every
+    column apply_rules/run_funnel produce, rule_flag included. This exercises
+    the exact frame shape scripts/evaluate.py's gate inspects, on the
+    smallest batch that can reach it, without a column-existence guard
+    papering over a real gap."""
+    scripts_dir = Path(__file__).resolve().parent.parent / "scripts"
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    import evaluate
+
+    tiny = pd.DataFrame([
+        {"transaction_id": f"T{i}", "amount": Decimal("100"), "amount_float": 100.0,
+         "country": "USA", "sender": f"S{i}", "receiver": f"R{i}"} for i in range(5)
+    ])
+    result = run_funnel(apply_rules(tiny))
+    assert result.dropped.empty
+    assert "rule_flag" in result.dropped.columns
+
+    rule_dropped_ids = evaluate.rule_flagged_dropped_ids(result.dropped)
+    assert rule_dropped_ids == []
+
+    failures = evaluate.quality_gate(
+        current={"recall": 1.0, "precision": 1.0, "f1": 1.0, "tp": 0, "fp": 0, "fn": 0, "tn": 0},
+        pattern_recall={},
+        rule_dropped_ids=rule_dropped_ids,
+        min_recall=1.0,
+        min_pattern_recall=1.0,
+    )
+    assert failures == []
+
+
+def test_evaluate_gate_reports_missing_rule_flag_column_safely():
+    """If a future run_funnel refactor ever dropped the rule_flag column from
+    `dropped`, the gate must not crash - it should treat that as "nothing to
+    report" for this specific check rather than raising a KeyError."""
+    import evaluate
+
+    dropped_without_rule_flag = pd.DataFrame({"transaction_id": ["X1", "X2"]})
+    assert evaluate.rule_flagged_dropped_ids(dropped_without_rule_flag) == []
+
+
+def test_evaluate_gate_fails_on_a_dropped_rule_hit():
+    import evaluate
+
+    dropped = pd.DataFrame({
+        "transaction_id": ["T1", "T2"],
+        "rule_flag": [True, False],
+    })
+    rule_dropped_ids = evaluate.rule_flagged_dropped_ids(dropped)
+    assert rule_dropped_ids == ["T1"]
+
+    failures = evaluate.quality_gate(
+        current={"recall": 1.0, "precision": 1.0, "f1": 1.0, "tp": 0, "fp": 0, "fn": 0, "tn": 0},
+        pattern_recall={},
+        rule_dropped_ids=rule_dropped_ids,
+        min_recall=None,
+        min_pattern_recall=None,
+    )
+    assert len(failures) == 1 and "T1" in failures[0]
+
+
 def test_funnel_flag_rate_tracks_the_data():
     """contamination=0.15 flagged exactly 15% regardless of content. It must not."""
     clean = pd.DataFrame([

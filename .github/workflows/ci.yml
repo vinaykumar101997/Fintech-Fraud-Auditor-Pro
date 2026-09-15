@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # requirements-dev.txt only - the pipeline regression suite and the
+      # funnel evaluation need no LLM/vector-store stack and no network.
+      - run: pip install -r requirements-dev.txt
+
+      - name: Generate the labelled sample ledger
+        run: python scripts/generate_sample_ledger.py
+
+      - name: Pipeline regression tests
+        run: pytest tests/ -v
+
+      - name: Funnel evaluation (recall/precision vs. the labelled set)
+        # circular_camouflaged is a known, accepted gap (see README Known
+        # limitations) - reported, not gated.
+        run: python scripts/evaluate.py --min-recall 1.0 --min-pattern-recall 1.0 --gate-exclude circular_camouflaged

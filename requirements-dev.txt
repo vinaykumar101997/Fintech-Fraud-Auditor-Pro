@@ -1,0 +1,14 @@
+# Minimal install for the offline test/eval path: tests/test_pipeline.py and
+# scripts/evaluate.py touch only utils/rules.py, utils/funnel.py,
+# utils/features.py, utils/data_loader.py, utils/graph_nodes.py,
+# utils/screening.py (rapidfuzz is imported lazily there), utils/sanitize.py,
+# utils/verdicts.py, and utils/audit_log.py - none of which import
+# langchain/langgraph/boto3/streamlit. This lets CI run the pipeline
+# regression suite without installing the LLM/vector-store stack.
+#
+# Use requirements.txt (or requirements.lock.txt) instead when you need the
+# Streamlit app or the compliance tier.
+pandas==3.0.2
+numpy==2.4.4
+scikit-learn==1.8.0
+pytest==8.3.4
