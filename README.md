@@ -293,7 +293,7 @@ python -m utils.chat_agent              # interactive corpus query
 | Container | Ran as root with build tools in the final layer | Multi-stage, non-root, healthcheck |
 | Screening | Six hardcoded names, LLM-authored freeze directives | CSV watchlist with aliases, templated directives |
 | Audit trail | Everything in session state, lost on refresh | SQLite append-only log with evidence hashes |
-| Tests | Benchmarked a code path the app never ran | 36 offline tests plus a labelled evaluation set |
+| Tests | Benchmarked a code path the app never ran | 41 offline tests plus a labelled evaluation set |
 | Dependencies | `langchain-text-splitters` missing; 4 unused pins | Declared and pruned |
 
 ## Known limitations
