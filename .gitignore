@@ -19,4 +19,3 @@ data/*.joblib
 qdrant_storage/
 eval/
 docs/INTERVIEW_PREP.md
-CLAUDE.md
