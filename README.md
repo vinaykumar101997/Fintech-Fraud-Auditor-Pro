@@ -175,8 +175,8 @@ it does mean the first install is slower and briefly pulls build tooling.
 1. Clone the repo:
 
    ```bash
-   git clone https://github.com/vinaykumar101997/Fintech-Fraud-Agent-Pro.git
-   cd Fintech-Fraud-Agent-Pro
+   git clone https://github.com/vinaykumar101997/Fintech-Fraud-Auditor-Pro.git
+   cd Fintech-Fraud-Auditor-Pro
    ```
 
 2. Create and activate a virtualenv:
