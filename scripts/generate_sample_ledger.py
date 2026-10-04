@@ -8,8 +8,9 @@ evaluation harness). Patterns injected:
   circular       - funds leave an account and return through intermediaries,
                    in legs large enough to trip the reporting threshold
   circular_small       - the same shape, in rings of 3-4 accounts, but every
-                         leg is $3,000-$7,000 - below the structuring band,
-                         so no rule threshold reaches it
+                         leg is under $7,000 - below the structuring band,
+                         so no rule threshold reaches it; each hop forwards
+                         90-100% of the previous leg
   circular_camouflaged - the same ring shape again, but built from businesses
                          that already have ordinary repeat activity in the
                          "clean" background, at the same amount distribution
@@ -68,11 +69,13 @@ def generate(n_clean: int = 420, seed: int = 7):
         ts = start + timedelta(minutes=rng.randint(0, 60 * 24 * 20))
         add(f"TXN-{i:05d}", sender, receiver, amount, rng.choice(CLEAN_COUNTRIES), ts, False, "clean")
 
+    # Laundering parties must NOT appear on data/sanctions_list.csv, or name
+    # screening detects the label rather than the behaviour (label leakage).
     # --- Structuring: $86k split into 10 legs just under the threshold ---
     ts = start + timedelta(days=4)
     for i in range(10):
         amount = round(rng.uniform(8600, 9850), 2)
-        add(f"STR-{i:03d}", "Halcyon Trading", f"Shell Holdings {i % 3}", amount,
+        add(f"STR-{i:03d}", "Larkspur Trading", f"Shell Holdings {i % 3}", amount,
             rng.choice(["USA", "Cayman Islands"]), ts + timedelta(hours=i * 3), True, "structuring")
 
     # --- Circular flow: money returns to origin through three hops ---
@@ -85,7 +88,7 @@ def generate(n_clean: int = 420, seed: int = 7):
     # --- Sanctioned jurisdiction, deliberately low value ---
     ts = start + timedelta(days=12)
     for i in range(6):
-        add(f"SAN-{i:03d}", "Kestrel Imports", "Unknown_Entity", round(rng.uniform(300, 1400), 2),
+        add(f"SAN-{i:03d}", "Wrenfield Imports", "Unknown_Entity", round(rng.uniform(300, 1400), 2),
             rng.choice(["Russia", "Iran", "North Korea"]), ts + timedelta(hours=i * 5), True, "sanctioned")
 
     # --- Circular flow (small): rings of 3-4 accounts, legs below the
@@ -96,8 +99,14 @@ def generate(n_clean: int = 420, seed: int = 7):
     for ring in range(rng.randint(2, 3)):
         size = rng.randint(3, 4)
         accounts = [f"Loop{ring}-{j}" for j in range(size)]
+        amount = None
         for i in range(size):
-            amount = round(rng.uniform(3000, 7000), 2)
+            # Each hop forwards 90-100% of what it received (fees, skims),
+            # as round-tripped money does. Benchmark change: legs used to be
+            # independent draws, so a "ring" could grow 57% in one lap. One
+            # draw per leg either way, so every later pattern is unchanged.
+            draw = rng.uniform(3000, 7000) if amount is None else amount * rng.uniform(0.9, 1.0)
+            amount = round(draw, 2)
             add(f"CIRS-{ring}-{i:02d}", accounts[i], accounts[(i + 1) % size], amount,
                 rng.choice(CLEAN_COUNTRIES), ts + timedelta(hours=i * 6), True, "circular_small")
         ts += timedelta(days=2)
