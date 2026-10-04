@@ -105,6 +105,44 @@ same author built both sides, and the pipeline still misses it. Treat the
 gated numbers as a regression guard against reintroducing the original bug,
 not as a claim about real-world detection rates.
 
+**Benchmark change: `circular_small` amounts.** The generator used to draw
+each `circular_small` leg independently from $3,000-$7,000, so a "ring" could
+grow 57% in one lap. Real round-tripped money doesn't do that. Each hop now
+forwards 90-100% of the previous leg. Same seed and same number of random
+draws, so only 5 rows changed (the non-first legs of the two rings) and
+every other typology is byte-identical. The **data** changed here, not only
+the detector, so both are shown separately.
+
+Funnel recall (`scripts/evaluate.py`, Tiers 0+1) is unchanged per typology:
+
+| Pattern | Before | After |
+|---|---|---|
+| structuring | 10/10 | 10/10 |
+| sanctioned | 6/6 | 6/6 |
+| fan_in | 11/11 | 11/11 |
+| circular | 3/3 | 3/3 |
+| circular_small | 7/7 | 7/7 |
+| circular_camouflaged | 1/8 | 1/8 |
+| clean (false positives) | 10/420 | 10/420 |
+
+Tier 3 circular-flow findings (rows whose topology audit reports circular
+flow, auditing every row against the full ledger):
+
+| Pattern | Shape-only, old data | Fund-flow, old data | Fund-flow, new data |
+|---|---|---|---|
+| clean (false positives) | 420/420 | 25/420 | 25/420 |
+| circular | 3/3 | 3/3 | 3/3 |
+| circular_small | 7/7 | 0/7 | 7/7 |
+| circular_camouflaged | 8/8 | 0/8 | 0/8 |
+
+`circular_small` drops to 0/7 on the old data only because its legs fail the
+amount tolerance. The remaining 25 clean rows are coincidences in the random
+background (11 two-way pairs and one 3-account ring, where opposite-direction
+trades of similar size happen to land within a day). Nothing in the data
+separates them from a real quick round trip. `circular_camouflaged` is 0/8:
+its legs are about two days apart with unrelated amounts, so under these
+rules it is not a fund-flow ring. Nothing was tuned to raise it.
+
 ## Architecture
 
 ```mermaid
@@ -119,10 +157,14 @@ graph TD
     G --> N[Investigative ledger<br/>every verdict recorded: SUSPICIOUS / CLEAR / ERROR]
     N -->|analyst selects any flagged row| H[Tier 3: LangGraph topology agent]
     H --> I{Topology score >= 70?}
-    I -->|yes| J[Execution pauses]
-    J -->|approve| K[SAR generation]
+    I -->|yes| J[Execution pauses for officer]
+    I -->|no| R[Forensic summary]
     J -->|reject| L[Escalate, no filing]
-    I -->|no| K
+    J -->|approve| R
+    N -->|any SUSPICIOUS row| O[Officer review<br/>approve / reject / escalate]
+    J -->|approve| K[SAR drafting]
+    O -->|approve| K
+    O -->|reject / escalate| L
     K --> M[Durable audit trail]
     L --> M
     N --> M
@@ -133,10 +175,16 @@ its verdict, lands in the investigative ledger, and the analyst manually picks a
 one of them to run the topology agent — a CLEAR-verdicted row can still be sent
 through it.
 
+A SAR is never drafted from a verdict or a score alone: it needs an officer
+approval recorded in the audit trail, from either the topology pause or the
+officer review available on every SUSPICIOUS row.
+
 **Tier 1, deterministic rules** (`utils/rules.py`). Reporting threshold, the
 structuring band below it, high-risk and secrecy jurisdictions, sanctions
 screening (RapidFuzz fuzzy name match, flags at 88% similarity or above), and
-unidentified counterparties. Runs first; a hit is binding.
+unidentified counterparties. Runs first; a hit is binding. RapidFuzz is
+required, not optional: without it screening fails closed and the batch is
+not audited, rather than every name passing as "no match".
 
 **Tier 0, behavioural funnel** (`utils/funnel.py`, `utils/features.py`). Twelve
 features describing how an account behaves across the batch — per-sender
@@ -155,13 +203,27 @@ Amazon Bedrock** by default, or **Gemini 2.5 Flash on Google Vertex AI** with
 comes back through `with_structured_output`.
 
 **Tier 3, topology** (`utils/graph_nodes.py`, `utils/graph_logic.py`). Circular
-flows, account velocity, and beneficiary obfuscation. Scoring is per unique
-counterparty and capped, so the result reflects network shape rather than how
-many rows were uploaded.
+flows, account velocity, and beneficiary obfuscation, over the full loaded
+ledger rather than only the rows the funnel forwarded. Circular flow models
+fund flow, not graph shape: a cycle of 2-6 accounts counts only if it includes
+the audited transaction, its legs run forward in time, it completes within
+`CYCLE_MAX_WINDOW_DAYS`, and its leg amounts differ by at most
+`CYCLE_AMOUNT_TOLERANCE`. (Shape alone flagged every background row, because
+businesses that trade both ways form graph cycles constantly.) **The defaults,
+1 day and 20%, were tuned on the synthetic sample ledger only and are
+provisional until validated on the IBM AML dataset in a later validation pass.** A ledger with
+no timestamps falls back to shape-only cycles and the finding says so. Scoring
+is per unique counterparty and capped, so the result reflects network shape
+rather than how many rows were uploaded.
 
 **Human review.** A topology score of 70 or above (out of 100) pauses execution
 via LangGraph's `interrupt_before`. Approval records the officer, timestamp,
 decision, and note; rejection routes to escalation and produces no filing.
+Any SUSPICIOUS row can also get an officer decision (approve, reject or
+escalate) from the SAR tab, whatever its topology score. Compliance actions
+(LLM verdicts, officer decisions, SAR drafts, sanctions matches) are written
+to the audit trail before they take effect. If that write fails, the action
+is blocked rather than going ahead unrecorded.
 
 ## Requirements
 
@@ -247,13 +309,17 @@ it does mean the first install is slower and briefly pulls build tooling.
 
 Tests and the funnel evaluation touch only `utils/rules.py`, `utils/funnel.py`,
 `utils/features.py`, `utils/data_loader.py`, `utils/graph_nodes.py`,
-`utils/screening.py`, `utils/sanitize.py`, `utils/verdicts.py`, and
-`utils/audit_log.py` - none of which import the LLM/vector-store stack, so
+`utils/screening.py`, `utils/sanitize.py`, `utils/verdicts.py`,
+`utils/sar_gate.py`, and `utils/audit_log.py` - none of which import the
+LLM/vector-store stack, so
 `pip install -r requirements-dev.txt` is enough to run everything below
 without `requirements.txt`. This is what `.github/workflows/ci.yml` installs.
+The exception is `tests/test_app.py` (Streamlit `AppTest` smoke tests with a
+fake model provider), which needs `requirements.txt` and is skipped without it.
 
 ```bash
-pytest tests/ -v                        # 41 offline regression tests, no network
+pytest tests/ -v                        # 94 offline regression tests, no network,
+                                        # plus 8 app smoke tests (full install only)
 
 # data/sample_ledger*.csv are gitignored (generated, not checked in) - build
 # them before evaluating. generate_sample_ledger.py uses a fixed seed (7), so
@@ -293,7 +359,7 @@ python -m utils.chat_agent              # interactive corpus query
 | Container | Ran as root with build tools in the final layer | Multi-stage, non-root, healthcheck |
 | Screening | Six hardcoded names, LLM-authored freeze directives | CSV watchlist with aliases, templated directives |
 | Audit trail | Everything in session state, lost on refresh | SQLite append-only log with evidence hashes |
-| Tests | Benchmarked a code path the app never ran | 41 offline tests plus a labelled evaluation set |
+| Tests | Benchmarked a code path the app never ran | 94 offline tests and 8 app smoke tests, plus a labelled evaluation set |
 | Dependencies | `langchain-text-splitters` missing; 4 unused pins | Declared and pruned |
 
 ## Known limitations
@@ -306,9 +372,11 @@ This is a prototype and the following are real gaps, not oversights:
 - **The bundled watchlist is a demo file.** Replace
   `data/sanctions_list.csv` with an OFAC SDN export. Name matching alone is not
   identity verification; confirm against date of birth and nationality.
-- **Topology runs on the forwarded subset**, so hops the funnel dropped are not
-  in the graph. Building the network from the full ledger is the next
-  substantive change.
+- **Ledgers without timestamps fall back to shape-only cycle detection.**
+  With no timing to check, any two businesses that trade both ways form a
+  "cycle", so circular-flow findings over-flag them (shape-only flagged
+  420/420 clean rows of the sample ledger). The finding says when it is
+  shape-only.
 - **SQLite is single-node.** Move to Postgres with append-only enforcement at the
   database level before this is an audit record anyone should rely on.
 - **Streamlit is synchronous.** Batches of a few thousand rows are fine; beyond
@@ -321,13 +389,14 @@ This is a prototype and the following are real gaps, not oversights:
   into the background almost completely (12% recall, and even that hit was
   coincidence). Real cycle detection exists (`utils/graph_nodes.py`, Tier 3)
   but only runs when an analyst manually selects a row to investigate - and a
-  row that nothing upstream forwards is never selected.
+  row that nothing upstream forwards is never selected. Even when selected,
+  its fund-flow check does not flag these rings (legs days apart, unrelated
+  amounts).
 
 ## Roadmap
 
 - Decoupled FastAPI backend with Celery for topology traversal
 - Postgres checkpointer and audit log
-- Full-ledger network construction for the topology tier
 - Analyst feedback loop to tune thresholds against confirmed outcomes
 
 ## License
