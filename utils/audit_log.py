@@ -48,6 +48,19 @@ CREATE INDEX IF NOT EXISTS idx_audit_time ON audit_events(occurred_at);
 """
 
 
+# Stages that record a compliance action: an LLM verdict, an officer's
+# decision, a SAR draft, a sanctions match. If one of these cannot be
+# written, the action must not proceed, so record() raises instead of logging
+# and carrying on.
+COMPLIANCE_STAGES = frozenset(
+    {"tier2_assessment", "human_review", "sar_drafted", "sanctions_hit"}
+)
+
+
+class AuditWriteError(RuntimeError):
+    """A compliance-stage audit event could not be persisted."""
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -93,7 +106,11 @@ def record(
     detail: Optional[str] = None,
     db_path: Optional[Path] = None,
 ) -> None:
-    """Append one immutable event. Never raises into the caller's path."""
+    """Append one immutable event.
+
+    For COMPLIANCE_STAGES a failed write raises AuditWriteError, so the caller
+    blocks the action. Other stages log the failure and never raise.
+    """
     try:
         with _connect(db_path) as conn:
             conn.execute(
@@ -113,6 +130,11 @@ def record(
             )
     except Exception as exc:  # noqa: BLE001
         logger.error("Failed to write audit event for %s: %s", transaction_id, exc)
+        if stage in COMPLIANCE_STAGES:
+            raise AuditWriteError(
+                f"Could not write the {stage} audit event for {transaction_id}; "
+                f"the action is blocked until the audit trail is writable. ({exc})"
+            ) from exc
 
 
 def record_many(events: List[Dict[str, Any]], db_path: Optional[Path] = None) -> None:
