@@ -54,6 +54,7 @@ langsmith==0.12.4
 MarkupSafe==3.0.3
 multidict==6.8.0
 narwhals==2.26.0
+networkx==3.7
 numpy==2.4.4
 orjson==3.12.0
 ormsgpack==1.12.2

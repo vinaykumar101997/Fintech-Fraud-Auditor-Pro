@@ -111,6 +111,24 @@ ML_RANDOM_STATE = 42
 # --- Tier 3: topology scoring ---
 CIRCULAR_FLOW_POINTS = int(os.getenv("CIRCULAR_FLOW_POINTS", "25"))
 CIRCULAR_FLOW_CAP = int(os.getenv("CIRCULAR_FLOW_CAP", "50"))
+# Cycles of length 2..CYCLE_MAX_LENGTH through the sender count as circular flow.
+CYCLE_MAX_LENGTH = int(os.getenv("CYCLE_MAX_LENGTH", "6"))
+# Hard ceiling on search steps per audit (legs tried in the fund-flow search,
+# or cycles enumerated in the structural fallback), so a dense graph cannot
+# hang it.
+CYCLE_SEARCH_LIMIT = int(os.getenv("CYCLE_SEARCH_LIMIT", "10000"))
+# A cycle is fund flow, not graph shape: its legs must run forward in time,
+# complete within this window, and carry similar amounts, and it must include
+# the audited transaction. Businesses that trade both ways form graph cycles
+# constantly; round-tripped money does not look like that.
+#
+# PROVISIONAL: the 1-day default was tuned on the synthetic sample ledger
+# only (7 days still left 259/420 clean rows flagged there). Validate both
+# values on the IBM AML dataset in a later validation pass before relying on them.
+CYCLE_MAX_WINDOW_DAYS = float(os.getenv("CYCLE_MAX_WINDOW_DAYS", "1"))
+# Max spread of leg amounts, as (largest - smallest) / largest. Also
+# provisional, as above.
+CYCLE_AMOUNT_TOLERANCE = float(os.getenv("CYCLE_AMOUNT_TOLERANCE", "0.2"))
 OBFUSCATION_POINTS = int(os.getenv("OBFUSCATION_POINTS", "50"))
 MISSING_DATA_POINTS = int(os.getenv("MISSING_DATA_POINTS", "10"))
 RAG_SUSPICIOUS_POINTS = int(os.getenv("RAG_SUSPICIOUS_POINTS", "20"))

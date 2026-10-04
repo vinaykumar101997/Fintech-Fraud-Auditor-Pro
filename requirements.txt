@@ -36,6 +36,9 @@ boto3>=1.43.64                    # langchain-aws 1.7.6 needs boto3>=1.43.64
 scikit-learn==1.8.0
 numpy==2.4.4
 
+# --- Tier 3: topology (bounded cycle detection in utils/graph_nodes.py) ---
+networkx==3.7
+
 # --- Vector database and embeddings ---
 qdrant-client==1.17.1
 
