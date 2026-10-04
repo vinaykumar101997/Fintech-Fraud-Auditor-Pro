@@ -63,6 +63,7 @@ def evaluate_row(
         hit = screener(name)
         if hit:
             reasons.append(f"{label} '{name}' matches sanctions list entry '{hit}'.")
+            result.sanctions_hits.append((label, name, hit))
 
     if str(sender).strip().lower() in config.PLACEHOLDER_ENTITIES and str(
         receiver
@@ -77,8 +78,8 @@ def evaluate_row(
 
 
 def apply_rules(df: pd.DataFrame, screener: Screener = _no_screening) -> pd.DataFrame:
-    """Add `rule_flag` and `rule_reasons` columns to the ledger."""
-    flags, reasons = [], []
+    """Add `rule_flag`, `rule_reasons` and `sanctions_hits` columns to the ledger."""
+    flags, reasons, sanctions = [], [], []
     for _, row in df.iterrows():
         outcome = evaluate_row(
             amount=row["amount"],
@@ -89,8 +90,28 @@ def apply_rules(df: pd.DataFrame, screener: Screener = _no_screening) -> pd.Data
         )
         flags.append(outcome.force_review)
         reasons.append(outcome.reasons)
+        sanctions.append(outcome.sanctions_hits)
 
     out = df.copy()
     out["rule_flag"] = flags
     out["rule_reasons"] = reasons
+    out["sanctions_hits"] = sanctions
     return out
+
+
+def sanctions_hit_events(ruled: pd.DataFrame, *, session_id: str, batch_id: str) -> List[dict]:
+    """sanctions_hit audit events (one per matched party) for a ruled batch.
+
+    Pure: the caller writes them with audit_log.record_many, before releasing
+    the batch, so a match that cannot be recorded blocks the batch.
+    """
+    events = []
+    for _, row in ruled.iterrows():
+        for label, name, entry in row.get("sanctions_hits") or []:
+            events.append(dict(
+                session_id=session_id, batch_id=batch_id,
+                transaction_id=str(row["transaction_id"]), stage="sanctions_hit",
+                verdict="SUSPICIOUS", rationale=f"{label} '{name}' matched {entry}",
+                detail=f"{label}: {name}",
+            ))
+    return events

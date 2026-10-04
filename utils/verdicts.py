@@ -8,7 +8,7 @@ to CLEAR.
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 
 class Verdict(str, Enum):
@@ -51,3 +51,5 @@ class RuleResult:
     flagged: bool = False
     reasons: List[str] = field(default_factory=list)
     force_review: bool = False  # bypasses the statistical funnel entirely
+    # (party role, screened name, matched list entry) per sanctions match.
+    sanctions_hits: List[Tuple[str, str, str]] = field(default_factory=list)
