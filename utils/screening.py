@@ -143,12 +143,24 @@ def best_effort_match(name: str) -> Optional[Tuple[str, float]]:
     return entries[index].canonical, float(score)
 
 
+class ScreeningUnavailable(RuntimeError):
+    """Sanctions screening cannot run. Raised instead of reporting 'no match'."""
+
+
 def rule_screener(name: str) -> Optional[str]:
-    """Adapter matching utils.rules.Screener."""
+    """Adapter matching utils.rules.Screener.
+
+    Fails closed: if the matcher cannot run, raise rather than return None,
+    because None means "screened and clear" to the rules engine.
+    """
     try:
         hit = screen(name)
-    except ImportError:
-        return None
+    except ImportError as exc:
+        raise ScreeningUnavailable(
+            "Sanctions screening is unavailable: rapidfuzz is not installed. "
+            "Run `pip install -r requirements.txt`. The batch cannot be audited "
+            "without screening."
+        ) from exc
     return hit.matched_name if hit else None
 
 
