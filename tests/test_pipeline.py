@@ -9,6 +9,7 @@ from __future__ import annotations
 import io
 import sys
 import tempfile
+from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -256,6 +257,209 @@ def test_risk_score_does_not_inflate_with_batch_size():
     assert large["risk_score"] - small["risk_score"] <= 30
 
 
+def _edges(*pairs):
+    return [{"sender": s, "receiver": r} for s, r in pairs]
+
+
+def _has_loop_finding(state):
+    return any(p.startswith("Circular flow") for p in state["detected_patterns"])
+
+
+def test_three_party_cycle_is_flagged_as_a_loop():
+    """A->B->C->A. The old check only saw A->B plus B->A, so this was invisible."""
+    state = initial_state("T", "A", "B", 1.0, _edges(("A", "B"), ("B", "C"), ("C", "A")), "CLEAR")
+    state.update(analyze_network_topology(state))
+    assert _has_loop_finding(state)
+    assert state["risk_score"] > 0
+
+
+def test_six_party_cycle_is_flagged_but_seven_is_out_of_bound():
+    six = _edges(*[(f"N{i}", f"N{(i + 1) % 6}") for i in range(6)])
+    seven = _edges(*[(f"N{i}", f"N{(i + 1) % 7}") for i in range(7)])
+    s6 = initial_state("T", "N0", "N1", 1.0, six, "CLEAR")
+    s7 = initial_state("T", "N0", "N1", 1.0, seven, "CLEAR")
+    s6.update(analyze_network_topology(s6))
+    s7.update(analyze_network_topology(s7))
+    assert _has_loop_finding(s6)
+    assert not _has_loop_finding(s7)
+
+
+def test_two_party_reciprocal_flow_is_still_flagged():
+    state = initial_state("T", "A", "B", 1.0, _edges(("A", "B"), ("B", "A")), "CLEAR")
+    state.update(analyze_network_topology(state))
+    assert _has_loop_finding(state)
+
+
+def test_acyclic_chain_is_not_flagged():
+    state = initial_state("T", "A", "B", 1.0, _edges(("A", "B"), ("B", "C"), ("C", "D")), "CLEAR")
+    state.update(analyze_network_topology(state))
+    assert not _has_loop_finding(state)
+    assert state["risk_score"] == 0
+
+
+def test_cycle_not_through_sender_is_not_attributed_to_it():
+    """B->C->B exists, but A is only upstream of it, so A is not in a loop."""
+    state = initial_state("T", "A", "B", 1.0, _edges(("A", "B"), ("B", "C"), ("C", "B")), "CLEAR")
+    state.update(analyze_network_topology(state))
+    assert not _has_loop_finding(state)
+
+
+_T0 = datetime(2026, 3, 2, 9, 0)
+
+
+def _legs(*legs, prefix="L"):
+    """(sender, receiver, hours after _T0, amount) -> timed, valued history
+    rows with IDs L0, L1, ..."""
+    return [{"transaction_id": f"{prefix}{i}", "sender": s, "receiver": r,
+             "timestamp": _T0 + timedelta(hours=h), "amount_float": a}
+            for i, (s, r, h, a) in enumerate(legs)]
+
+
+def _loop_for(txn_id, history):
+    """Audit one transaction of the history; True if it gets a loop finding."""
+    row = next(h for h in history if h["transaction_id"] == txn_id)
+    state = initial_state(txn_id, row["sender"], row["receiver"], 1.0, history, "CLEAR")
+    state.update(analyze_network_topology(state))
+    return _has_loop_finding(state)
+
+
+def test_time_ordered_ring_within_window_with_similar_amounts_is_flagged():
+    ring = _legs(("A", "B", 0, 1000.0), ("B", "C", 6, 1050.0), ("C", "A", 12, 980.0))
+    # Every leg is on the loop, not only the one the money left first.
+    assert all(_loop_for(f"L{i}", ring) for i in range(3))
+
+
+def test_out_of_order_ring_is_not_flagged():
+    """Same accounts and amounts, but no rotation of the legs runs forward in
+    time, so the money that came back is not the money that went out."""
+    ring = _legs(("A", "B", 12, 1000.0), ("B", "C", 6, 1050.0), ("C", "A", 0, 980.0))
+    assert not any(_loop_for(f"L{i}", ring) for i in range(3))
+
+
+def test_ring_spread_beyond_the_window_is_not_flagged(monkeypatch):
+    ring = _legs(("A", "B", 0, 1000.0), ("B", "C", 14, 1050.0), ("C", "A", 28, 980.0))
+    assert config.CYCLE_MAX_WINDOW_DAYS == 1
+    assert not _loop_for("L0", ring)
+    monkeypatch.setattr(config, "CYCLE_MAX_WINDOW_DAYS", 2)
+    assert _loop_for("L0", ring)
+
+
+def test_ring_with_very_different_amounts_is_not_flagged(monkeypatch):
+    ring = _legs(("A", "B", 0, 1000.0), ("B", "C", 6, 5000.0), ("C", "A", 12, 1000.0))
+    assert config.CYCLE_AMOUNT_TOLERANCE == 0.2
+    assert not _loop_for("L0", ring)
+    monkeypatch.setattr(config, "CYCLE_AMOUNT_TOLERANCE", 0.85)
+    assert _loop_for("L0", ring)
+
+
+def test_bidirectional_trade_is_not_a_loop_but_a_matching_leg_among_it_is():
+    """Two businesses that trade both ways are not round-tripping. A cycle is
+    judged on individual transactions, so one valid pair among the noise
+    still counts."""
+    trade = _legs(("A", "B", 0, 1000.0), ("B", "A", 5, 3200.0), ("B", "A", 30, 640.0),
+                  ("A", "B", 40, 2500.0))
+    assert not any(_loop_for(f"L{i}", trade) for i in range(4))
+    trade += _legs(("B", "A", 50, 2400.0), prefix="M")
+    assert _loop_for("L3", trade)
+
+
+def test_cycle_must_include_the_audited_transaction():
+    """A's other transfers are not round trips just because A is on a ring."""
+    history = _legs(("A", "B", 0, 1000.0), ("B", "C", 6, 1050.0), ("C", "A", 12, 980.0),
+                    ("A", "D", 8, 1000.0))
+    assert _loop_for("L0", history)
+    assert not _loop_for("L3", history)
+
+
+def test_untimed_history_falls_back_to_structural_cycles_and_says_so():
+    state = initial_state("T", "A", "B", 1.0, _edges(("A", "B"), ("B", "C"), ("C", "A")), "CLEAR")
+    state.update(analyze_network_topology(state))
+    loop = [p for p in state["detected_patterns"] if p.startswith("Circular flow")]
+    assert loop and "no timestamps" in loop[0]
+
+
+def test_topology_history_carries_timestamp_and_amount():
+    from utils.graph_nodes import network_history_from_ledger
+
+    ledger, _ = load_ledger(io.StringIO(
+        "transaction_id,amount,country,sender,receiver,timestamp\n"
+        "T1,500,USA,A,B,2026-03-02 09:00:00\n"))
+    row = network_history_from_ledger(ledger)[0]
+    assert row["amount_float"] == 500.0
+    assert row["timestamp"] == datetime(2026, 3, 2, 9, 0)
+
+
+def test_generated_small_rings_forward_what_they_received():
+    """Benchmark realism: each circular_small hop forwards 90-100% of the
+    previous leg, as round-tripped money does. Independent random leg
+    amounts made the "ring" grow or shrink by up to 57% per lap."""
+    scripts_dir = Path(__file__).resolve().parent.parent / "scripts"
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    from generate_sample_ledger import generate
+
+    small = generate().query("pattern == 'circular_small'").copy()
+    small["ring"] = small["transaction_id"].str.split("-").str[1]
+    small["amt"] = small["amount"].str.replace(",", "").astype(float)
+    for _, ring in small.sort_values("transaction_id").groupby("ring"):
+        amounts = ring["amt"].tolist()
+        for prev, nxt in zip(amounts, amounts[1:]):
+            assert 0.9 * prev - 0.01 <= nxt <= prev + 0.01
+
+
+def test_circular_flow_findings_on_the_sample_ledger(tmp_path):
+    """Background businesses trade both ways, so a shape-only check flagged
+    every clean row (420/420). Fund-flow cycles anchored on the audited
+    transaction must not. circular_camouflaged is deliberately not asserted:
+    its legs are days apart with unrelated amounts, so it is not a fund-flow
+    ring under these rules, and nothing is tuned to catch it."""
+    from utils.graph_nodes import network_history_from_ledger
+
+    labelled, ledger = _load_generated_ledger(tmp_path)
+    ledger = ledger.merge(labelled[["transaction_id", "pattern"]], on="transaction_id")
+    history = network_history_from_ledger(ledger)
+    flagged = {}
+    for _, row in ledger.iterrows():
+        if _loop_for(row["transaction_id"], history):
+            flagged[row["pattern"]] = flagged.get(row["pattern"], 0) + 1
+    totals = ledger["pattern"].value_counts()
+
+    assert flagged.get("clean", 0) <= 30  # was 420/420
+    assert flagged.get("circular", 0) == totals["circular"]
+    assert flagged.get("circular_small", 0) == totals["circular_small"]
+
+
+def _ring_ledger():
+    """A->B->C->A buried in unrelated traffic. The funnel forwarded only T1."""
+    rows = [("T1", "A", "B"), ("T2", "B", "C"), ("T3", "C", "A")]
+    rows += [(f"X{i}", f"S{i}", f"R{i}") for i in range(30)]
+    return pd.DataFrame([
+        {"transaction_id": t, "sender": s, "receiver": r, "amount_float": 500.0, "country": "USA"}
+        for t, s, r in rows
+    ])
+
+
+def test_topology_history_comes_from_the_full_ledger_not_the_funnel():
+    """The app used to build history from the forwarded subset only, so a
+    leg the funnel dropped (B->C here) silently broke the loop."""
+    from utils.graph_nodes import network_history_from_ledger
+
+    ledger = _ring_ledger()
+    history = network_history_from_ledger(ledger)
+    assert {h["transaction_id"] for h in history} == set(ledger["transaction_id"])
+
+    state = initial_state("T1", "A", "B", 500.0, history, "CLEAR")
+    state.update(analyze_network_topology(state))
+    assert _has_loop_finding(state)
+
+
+def test_velocity_counts_only_rows_linked_to_the_sender():
+    """With a full-ledger history, unrelated rows must not count as transit."""
+    state = initial_state("T1", "A", "B", 500.0, _ring_ledger().to_dict("records"), "CLEAR")
+    state.update(analyze_network_topology(state))
+    assert not any("transit" in p for p in state["detected_patterns"])
+
+
 def test_risk_score_is_capped_at_100():
     state = initial_state("T", "Unknown_Entity", "Unknown_Entity", 1.0, _history(80, 12), "SUSPICIOUS")
     state.update(analyze_network_topology(state))
@@ -291,6 +495,17 @@ def test_human_decision_is_recorded():
     state.update(record_human_decision(state))
     assert state["human_decided_at"]
     assert any("officer.k" in p for p in state["detected_patterns"])
+
+
+@pytest.mark.parametrize("decision", [None, "", "yes", "APPROVED", "ok"])
+def test_missing_or_unknown_decision_escalates_never_approves(decision):
+    """A resume without a recorded decision used to default to 'approve',
+    and an unrecognised value fell through route_after_human to the report."""
+    state = initial_state("T", "A", "B", 1.0, [], "SUSPICIOUS")
+    state.update({"human_decision": decision, "human_approver": "officer.k"})
+    state.update(record_human_decision(state))
+    assert state["human_decision"] == "escalate"
+    assert route_after_human(state) == "escalate_case"
 
 
 def test_rejection_does_not_produce_a_report():
@@ -348,6 +563,86 @@ def test_name_normalization_is_order_and_suffix_insensitive(a, b):
     assert normalize_name(a) == normalize_name(b)
 
 
+def test_rule_screener_fails_closed_without_rapidfuzz(monkeypatch):
+    """A missing dependency used to return None - 'no match' - for every
+    name, silently disabling sanctions screening for the whole batch."""
+    from utils.screening import rule_screener
+
+    monkeypatch.setitem(sys.modules, "rapidfuzz", None)  # makes the import fail
+    with pytest.raises(RuntimeError, match="rapidfuzz"):
+        rule_screener("Viktor Bout")
+
+
+def test_apply_rules_blocks_when_screening_is_unavailable(monkeypatch):
+    from utils.screening import rule_screener
+
+    monkeypatch.setitem(sys.modules, "rapidfuzz", None)
+    frame = pd.DataFrame([{"transaction_id": "T1", "amount": Decimal("100"),
+                           "amount_float": 100.0, "country": "USA",
+                           "sender": "Viktor Bout", "receiver": "Acme"}])
+    with pytest.raises(RuntimeError, match="rapidfuzz"):
+        apply_rules(frame, screener=rule_screener)
+
+
+def _fake_screener(name):
+    return "Viktor Bout" if "bout" in name.lower() else None
+
+
+def test_rules_report_sanctions_hits_as_structured_data():
+    """Recording a batch match must not depend on parsing reason prose."""
+    result = evaluate_row(Decimal("100"), "USA", sender="Acme", receiver="V. Bout",
+                          screener=_fake_screener)
+    assert result.sanctions_hits == [("Receiver", "V. Bout", "Viktor Bout")]
+    assert evaluate_row(Decimal("100"), "USA", "Acme", "Corvus",
+                        screener=_fake_screener).sanctions_hits == []
+
+
+def test_batch_sanctions_matches_become_sanctions_hit_events():
+    from utils.rules import sanctions_hit_events
+
+    frame = pd.DataFrame([
+        {"transaction_id": t, "amount": Decimal("100"), "amount_float": 100.0,
+         "country": "USA", "sender": s, "receiver": r}
+        for t, s, r in [("T1", "Acme", "V. Bout"), ("T2", "Acme", "Corvus"),
+                        ("T3", "Bout Viktor", "V. Bout")]])
+    events = sanctions_hit_events(apply_rules(frame, screener=_fake_screener),
+                                  session_id="s", batch_id="b1")
+    assert [(e["transaction_id"], e["stage"], e["verdict"], e["detail"]) for e in events] == [
+        ("T1", "sanctions_hit", "SUSPICIOUS", "Receiver: V. Bout"),
+        ("T3", "sanctions_hit", "SUSPICIOUS", "Sender: Bout Viktor"),
+        ("T3", "sanctions_hit", "SUSPICIOUS", "Receiver: V. Bout"),
+    ]
+    assert all(e["batch_id"] == "b1" and "Viktor Bout" in e["rationale"] for e in events)
+
+
+def test_batch_sanctions_hit_write_failure_raises(tmp_path):
+    from utils.rules import sanctions_hit_events
+
+    frame = pd.DataFrame([{"transaction_id": "T1", "amount": Decimal("100"),
+                           "amount_float": 100.0, "country": "USA",
+                           "sender": "Acme", "receiver": "V. Bout"}])
+    events = sanctions_hit_events(apply_rules(frame, screener=_fake_screener),
+                                  session_id="s", batch_id="b1")
+    with pytest.raises(audit_log.AuditWriteError):
+        audit_log.record_many(events, db_path=_unwritable_db(tmp_path, "parent-is-a-file"))
+
+
+def test_generated_ledger_names_do_not_match_the_watchlist():
+    """Label leakage: if the generator's laundering senders are also on the
+    demo watchlist, name screening 'detects' the label, not the behaviour."""
+    from utils.screening import rule_screener
+
+    scripts_dir = Path(__file__).resolve().parent.parent / "scripts"
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    from generate_sample_ledger import generate
+
+    labelled = generate()
+    names = set(labelled["sender"]) | set(labelled["receiver"])
+    hits = {n: rule_screener(n) for n in sorted(names)}
+    assert {n: h for n, h in hits.items() if h} == {}
+
+
 def test_normalize_name_handles_empty_input():
     assert normalize_name("") == "" and normalize_name(None) == ""
 
@@ -365,9 +660,143 @@ def test_audit_events_persist():
     assert audit_log.batch_summary("b", db) == {"SUSPICIOUS": 1}
 
 
-def test_audit_log_failure_does_not_raise():
-    audit_log.record(session_id="s", batch_id="b", transaction_id="T1", stage="x",
-                     db_path=Path("/nonexistent-root/nope/audit.sqlite3"))
+# --- SAR gate --------------------------------------------------------------
+def _review(txn, verdict, batch="b1", actor="officer.k", event_id=1):
+    return {"id": event_id, "transaction_id": txn, "batch_id": batch,
+            "stage": "human_review", "verdict": verdict, "actor": actor}
+
+
+def test_sar_blocked_without_human_review():
+    """An LLM SUSPICIOUS verdict alone must not unlock a SAR draft."""
+    from utils.sar_gate import sar_approval
+
+    events = [{"id": 1, "transaction_id": "T1", "batch_id": "b1",
+               "stage": "tier2_assessment", "verdict": "SUSPICIOUS", "actor": None}]
+    decision = sar_approval(events, "T1", batch_id="b1")
+    assert not decision.allowed
+    assert "officer approval" in decision.reason.lower()
+
+
+def test_sar_allowed_after_officer_approval():
+    from utils.sar_gate import sar_approval
+
+    assert sar_approval([_review("T1", "APPROVE")], "T1", batch_id="b1").allowed
+
+
+@pytest.mark.parametrize(
+    "events",
+    [[_review("T1", "REJECT")],
+     [_review("T1", "APPROVE", event_id=1), _review("T1", "REJECT", event_id=2)],
+     [_review("T2", "APPROVE")],
+     [_review("T1", "APPROVE", batch="other-batch")],
+     [_review("T1", "APPROVE", actor="")]],
+    ids=["rejected", "later-rejection-wins", "other-txn", "other-batch", "no-officer"],
+)
+def test_sar_blocked_without_a_valid_approval(events):
+    from utils.sar_gate import sar_approval
+
+    assert not sar_approval(events, "T1", batch_id="b1").allowed
+
+
+def test_sar_gate_reads_approval_from_the_audit_log():
+    """End to end through the real SQLite trail, as app.py uses it."""
+    from utils.sar_gate import sar_approval
+
+    db = Path(tempfile.mkdtemp()) / "audit.sqlite3"
+    audit_log.initialize(db)
+    audit_log.record(session_id="s", batch_id="b1", transaction_id="T1",
+                     stage="tier2_assessment", verdict="SUSPICIOUS", db_path=db)
+    assert not sar_approval(audit_log.history("T1", db), "T1", batch_id="b1").allowed
+    audit_log.record(session_id="s", batch_id="b1", transaction_id="T1",
+                     stage="human_review", verdict="APPROVE", actor="officer.k", db_path=db)
+    assert sar_approval(audit_log.history("T1", db), "T1", batch_id="b1").allowed
+
+
+# --- officer review outside the topology graph ------------------------------
+def _officer_review(db, **overrides):
+    from utils.sar_gate import record_officer_review
+
+    kwargs = dict(session_id="s", batch_id="b1", transaction_id="T1", row_verdict="SUSPICIOUS",
+                  officer="officer.k", decision="approve", note="checked KYC")
+    kwargs.update(overrides)
+    return record_officer_review(**kwargs, db_path=db)
+
+
+def test_officer_review_unlocks_a_sar_without_any_topology_run(tmp_path):
+    """A SUSPICIOUS row scoring under 70 never pauses the graph, so before
+    this it could never be approved and never get a SAR."""
+    from utils.sar_gate import sar_approval
+
+    db = tmp_path / "audit.sqlite3"
+    audit_log.initialize(db)
+    event = _officer_review(db)
+    rows = audit_log.history("T1", db)
+    assert [(r["stage"], r["verdict"], r["actor"], r["detail"]) for r in rows] == [
+        ("human_review", "APPROVE", "officer.k", "checked KYC")]
+    assert event["verdict"] == "APPROVE"
+    assert sar_approval(rows, "T1", batch_id="b1").allowed
+
+
+@pytest.mark.parametrize("decision", ["reject", "ESCALATE"])
+def test_officer_review_rejection_or_escalation_keeps_the_sar_locked(tmp_path, decision):
+    from utils.sar_gate import sar_approval
+
+    db = tmp_path / "audit.sqlite3"
+    audit_log.initialize(db)
+    _officer_review(db, decision="approve")
+    _officer_review(db, decision=decision)  # latest decision wins
+    assert not sar_approval(audit_log.history("T1", db), "T1", batch_id="b1").allowed
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [{"row_verdict": "CLEAR"}, {"row_verdict": "ERROR"}, {"officer": "  "},
+     {"decision": "yes"}, {"decision": ""}],
+    ids=["clear-row", "error-row", "no-officer", "unknown-decision", "no-decision"],
+)
+def test_officer_review_refuses_invalid_requests_without_recording(tmp_path, overrides):
+    from utils.sar_gate import OfficerReviewRefused
+
+    db = tmp_path / "audit.sqlite3"
+    audit_log.initialize(db)
+    with pytest.raises(OfficerReviewRefused):
+        _officer_review(db, **overrides)
+    assert audit_log.history("T1", db) == []
+
+
+def test_officer_review_is_not_applied_if_it_cannot_be_recorded(tmp_path):
+    with pytest.raises(audit_log.AuditWriteError):
+        _officer_review(_unwritable_db(tmp_path, "parent-is-a-file"))
+
+
+def _unwritable_db(tmp_path: Path, mode: str) -> Path:
+    """Audit DB paths that genuinely fail on every OS. (The old
+    '/nonexistent-root/...' path is silently created by mkdir on Windows.)"""
+    if mode == "parent-is-a-file":
+        blocker = tmp_path / "blocker"
+        blocker.write_text("not a directory")
+        return blocker / "audit.sqlite3"
+    return tmp_path / "uninitialised.sqlite3"  # no schema: "no such table"
+
+
+@pytest.mark.parametrize("mode", ["parent-is-a-file", "no-schema"])
+@pytest.mark.parametrize("stage", ["tier2_assessment", "human_review", "sar_drafted", "sanctions_hit"])
+def test_compliance_audit_write_failure_raises(tmp_path, stage, mode):
+    """LLM verdicts, officer decisions and SAR drafts must not proceed
+    unrecorded. A swallowed write failure is an action with no audit trail."""
+    with pytest.raises(RuntimeError, match="audit") as exc:
+        audit_log.record(session_id="s", batch_id="b", transaction_id="T1", stage=stage,
+                         verdict="APPROVE", db_path=_unwritable_db(tmp_path, mode))
+    assert exc.type.__name__ == "AuditWriteError"
+
+
+def test_non_compliance_audit_write_failure_is_logged_not_raised(tmp_path, caplog):
+    """Informational stages (e.g. funnel bookkeeping) still never break the run."""
+    with caplog.at_level("ERROR"):
+        audit_log.record(session_id="s", batch_id="b", transaction_id="T1",
+                         stage="funnel_forwarded",
+                         db_path=_unwritable_db(tmp_path, "parent-is-a-file"))
+    assert "Failed to write audit event" in caplog.text
 
 
 if __name__ == "__main__":  # allows running without pytest installed

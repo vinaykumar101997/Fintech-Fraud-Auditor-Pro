@@ -27,16 +27,23 @@ load_dotenv(override=True)
 import config  # noqa: E402
 from utils import audit_log  # noqa: E402
 from utils.agents import ComplianceAuditEngine  # noqa: E402
-from utils.audit_log import evidence_hash  # noqa: E402
+from utils.audit_log import AuditWriteError, evidence_hash  # noqa: E402
 from utils.chat_agent import ComplianceIntelligenceProvider, ProviderUnavailable  # noqa: E402
 from utils.data_loader import LedgerSchemaError, load_ledger  # noqa: E402
 from utils.funnel import explain_row, run_funnel  # noqa: E402
 from utils.llm_provider import describe as provider_description  # noqa: E402
 from utils.graph_logic import HUMAN_NODE, build_compliance_graph, thread_config  # noqa: E402
-from utils.graph_nodes import initial_state  # noqa: E402
-from utils.rules import apply_rules  # noqa: E402
+from utils.graph_nodes import initial_state, network_history_from_ledger  # noqa: E402
+from utils.rules import apply_rules, sanctions_hit_events  # noqa: E402
+from utils.sar_gate import (  # noqa: E402
+    OFFICER_DECISIONS,
+    OfficerReviewRefused,
+    record_officer_review,
+    sar_approval,
+)
 from utils.schemas import SuspiciousActivityReport  # noqa: E402
 from utils.screening import (  # noqa: E402
+    ScreeningUnavailable,
     best_effort_match,
     load_watchlist,
     render_freeze_directive,
@@ -191,7 +198,7 @@ def render_sidebar(provider, backend_error):
 
 
 # --------------------------------------------------------------------------
-# Phase 1: ingestion and funnel
+# Ingestion and funnel
 # --------------------------------------------------------------------------
 def render_ingestion(engine, provider):
     st.subheader("1. Load a transaction ledger")
@@ -233,7 +240,21 @@ def render_ingestion(engine, provider):
     audit_log.initialize()
 
     with st.spinner("Applying deterministic rules..."):
-        ruled = apply_rules(ledger, screener=rule_screener)
+        try:
+            ruled = apply_rules(ledger, screener=rule_screener)
+        except ScreeningUnavailable as exc:
+            st.error(str(exc))
+            return
+
+    # Record every sanctions match BEFORE anything else runs or is released:
+    # a match that cannot be recorded blocks the batch.
+    try:
+        audit_log.record_many(
+            sanctions_hit_events(ruled, session_id=session_id(), batch_id=batch_id)
+        )
+    except AuditWriteError as exc:
+        st.error(f"Batch not audited. {exc}")
+        return
 
     with st.spinner("Scoring behavioural anomalies..."):
         result = run_funnel(ruled)
@@ -269,8 +290,14 @@ def render_ingestion(engine, provider):
         st.dataframe(result.flagged, use_container_width=True, hide_index=True)
         return
 
-    assessed = assess_batch(result.flagged, engine, provider, batch_id)
+    try:
+        assessed = assess_batch(result.flagged, engine, provider, batch_id)
+    except AuditWriteError as exc:
+        # Verdicts that cannot be recorded are not released to the analyst.
+        st.error(str(exc))
+        return
     st.session_state.audit_results = assessed
+    st.session_state.ledger = ledger  # full batch, for topology
     st.session_state.batch_id = batch_id
     st.session_state.funnel_stats = {
         "total": result.total_rows, "forwarded": result.forwarded,
@@ -280,7 +307,7 @@ def render_ingestion(engine, provider):
 
 
 # --------------------------------------------------------------------------
-# Phase 2: investigation
+# Investigation
 # --------------------------------------------------------------------------
 def render_investigation(provider):
     df: pd.DataFrame = st.session_state.audit_results
@@ -356,8 +383,9 @@ def render_topology(df: pd.DataFrame, batch_id: str):
 
         if st.button("Run topology audit", use_container_width=True):
             row = df[df["transaction_id"] == target].iloc[0]
-            neighbours = df[(df["sender"] == row["sender"]) | (df["receiver"] == row["sender"])]
-            history = neighbours[["transaction_id", "sender", "receiver", "amount_float", "country"]].to_dict("records")
+            # The full loaded ledger, not the funnel-forwarded subset, so cycle
+            # and velocity scores do not depend on what Tier 0 kept.
+            history = network_history_from_ledger(st.session_state.get("ledger", df))
 
             state = initial_state(
                 transaction_id=str(row["transaction_id"]),
@@ -370,8 +398,8 @@ def render_topology(df: pd.DataFrame, batch_id: str):
             st.rerun()
 
         st.caption(
-            "Topology runs on the forwarded subset. Rows dropped by the funnel are "
-            "not part of the graph."
+            "Topology runs on the full loaded ledger, including rows the funnel did "
+            f"not forward. Cycles of length 2-{config.CYCLE_MAX_LENGTH} are detected."
         )
 
     with right:
@@ -405,18 +433,25 @@ def render_topology(df: pd.DataFrame, batch_id: str):
                     st.warning("Enter the reviewing officer's name before deciding.")
                     return
                 decided_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                # Record BEFORE resuming: a decision that cannot be audited must
+                # not take effect (and the SAR gate reads this event).
+                try:
+                    audit_log.record(
+                        session_id=session_id(), batch_id=batch_id, transaction_id=str(target),
+                        stage="human_review", verdict=decision.upper(),
+                        risk_score=int(values.get("risk_score", 0)), actor=approver.strip(),
+                        rationale="; ".join(values.get("detected_patterns") or []),
+                        detail=note.strip() or None,
+                    )
+                except AuditWriteError as exc:
+                    st.error(f"Decision not applied. {exc}")
+                    return
                 graph.update_state(
                     cfg,
                     {"human_decision": decision, "human_approver": approver.strip(),
                      "human_note": note.strip(), "human_decided_at": decided_at},
                 )
                 final = graph.invoke(None, config=cfg)
-                audit_log.record(
-                    session_id=session_id(), batch_id=batch_id, transaction_id=str(target),
-                    stage="human_review", verdict=decision.upper(),
-                    risk_score=int(final.get("risk_score", 0)), actor=approver.strip(),
-                    rationale=final.get("forensic_summary", ""), detail=note.strip() or None,
-                )
                 # Persisted, so the outcome survives the next rerun.
                 st.session_state.setdefault("graph_outcomes", {})[str(target)] = final
                 st.rerun()
@@ -436,6 +471,33 @@ def render_topology(df: pd.DataFrame, batch_id: str):
                 )
 
 
+def render_officer_review(df: pd.DataFrame, target: str, batch_id: str):
+    """Officer decision on a SUSPICIOUS row, independent of the topology
+    graph (which only pauses at HITL_REVIEW_THRESHOLD)."""
+    with st.expander("Officer review", expanded=True):
+        officer = st.text_input("Reviewing officer", key=f"sar_officer_{target}")
+        note = st.text_area("Decision note", key=f"sar_note_{target}", height=80)
+        cols = st.columns(len(OFFICER_DECISIONS))
+        clicked = [d for d, col in zip(OFFICER_DECISIONS, cols)
+                   if col.button(d.title(), key=f"sar_{d.lower()}_{target}", use_container_width=True)]
+        if not clicked:
+            return
+        row = df[df["transaction_id"] == target].iloc[0]
+        try:
+            record_officer_review(
+                session_id=session_id(), batch_id=batch_id, transaction_id=target,
+                row_verdict=str(row["verdict"]), officer=officer, decision=clicked[0],
+                note=note, rationale=str(row.get("forensic_analysis") or "") or None,
+            )
+        except OfficerReviewRefused as exc:
+            st.warning(str(exc))
+            return
+        except AuditWriteError as exc:
+            st.error(f"Decision not applied. {exc}")
+            return
+        st.success(f"{clicked[0].title()} recorded for {target} by {officer.strip()}.")
+
+
 def render_sar(df: pd.DataFrame, provider, batch_id: str):
     candidates = df[df["verdict"] == Verdict.SUSPICIOUS.value]["transaction_id"].tolist()
     if not candidates:
@@ -446,6 +508,20 @@ def render_sar(df: pd.DataFrame, provider, batch_id: str):
         return
 
     target = st.selectbox("Flagged transaction", candidates, key="sar_pick")
+    render_officer_review(df, str(target), batch_id)
+
+    # An LLM verdict is not an authorisation to file. Fail closed if the
+    # audit trail cannot be read.
+    try:
+        gate = sar_approval(audit_log.history(str(target)), str(target), batch_id=batch_id)
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"SAR drafting requires officer approval, which could not be verified: {exc}")
+        return
+    if not gate.allowed:
+        st.warning(gate.reason)
+        return
+    st.caption(gate.reason)
+
     if not st.button("Draft SAR", type="primary"):
         return
 
@@ -473,25 +549,34 @@ def render_sar(df: pd.DataFrame, provider, batch_id: str):
                 "Use only facts present in the record.\n\n" + evidence
             )
         payload = {"report_id": report_id, **report.model_dump()}
-        st.success("SAR drafted.")
-        st.json(payload)
-        st.download_button(
-            "Download SAR (JSON)",
-            data=json.dumps(payload, indent=2, default=str),
-            file_name=f"SAR-{report_id[:8]}.json", mime="application/json",
-        )
-        audit_log.record(
-            session_id=session_id(), batch_id=batch_id, transaction_id=str(target),
-            stage="sar_drafted", verdict=Verdict.SUSPICIOUS.value,
-            risk_score=report.overall_risk_score, model_name=config.chat_model_name(),
-            evidence=evidence, detail=f"report_id={report_id}",
-        )
     except Exception as exc:  # noqa: BLE001
         st.error(f"SAR drafting failed: {exc}")
         audit_log.record(
             session_id=session_id(), batch_id=batch_id, transaction_id=str(target),
             stage="sar_failed", detail=str(exc),
         )
+        return
+
+    # Record BEFORE release: a draft with no audit entry is never shown or
+    # downloadable.
+    try:
+        audit_log.record(
+            session_id=session_id(), batch_id=batch_id, transaction_id=str(target),
+            stage="sar_drafted", verdict=Verdict.SUSPICIOUS.value,
+            risk_score=report.overall_risk_score, model_name=config.chat_model_name(),
+            evidence=evidence, detail=f"report_id={report_id}",
+        )
+    except AuditWriteError as exc:
+        st.error(f"SAR withheld. {exc}")
+        return
+
+    st.success("SAR drafted.")
+    st.json(payload)
+    st.download_button(
+        "Download SAR (JSON)",
+        data=json.dumps(payload, indent=2, default=str),
+        file_name=f"SAR-{report_id[:8]}.json", mime="application/json",
+    )
 
 
 def render_screening(batch_id: str):
@@ -516,17 +601,23 @@ def render_screening(batch_id: str):
     if hit:
         st.error(f"Potential match: {hit.matched_name} ({hit.entry_type})")
         st.metric("Match score", f"{hit.score:.1f}%", delta="Above threshold", delta_color="inverse")
+        # Record BEFORE issuing: a freeze directive with no audit entry is
+        # never shown.
+        try:
+            audit_log.record(
+                session_id=session_id(), batch_id=batch_id, transaction_id=query,
+                stage="sanctions_hit", verdict="SUSPICIOUS", risk_score=int(hit.score),
+                rationale=f"Matched {hit.matched_name}",
+            )
+        except AuditWriteError as exc:
+            st.error(f"Freeze directive withheld. {exc}")
+            return
         directive = render_freeze_directive(
             hit, reference=f"FRZ-{uuid.uuid4().hex[:8].upper()}",
             issued_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         )
         st.code(directive, language="text")
         st.caption("Fixed template with slot filling. Not model-generated.")
-        audit_log.record(
-            session_id=session_id(), batch_id=batch_id, transaction_id=query,
-            stage="sanctions_hit", verdict="SUSPICIOUS", risk_score=int(hit.score),
-            rationale=f"Matched {hit.matched_name}",
-        )
     else:
         if fallback:
             name, score = fallback
