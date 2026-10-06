@@ -1,147 +1,44 @@
 # Fintech Fraud Auditor
 
-A tiered anti-money-laundering screening prototype. Cheap deterministic checks and
-a behavioural anomaly model reduce a transaction ledger to the rows worth
-spending an LLM call on, then a retrieval-grounded compliance tier and a stateful
-graph agent assess what survives.
+A tool that screens bank transactions for money laundering using rules, statistics, network analysis and an AI model, with a compliance officer making the final call.
 
-## The design decision that matters
+## What it is
 
-The obvious way to build a cost funnel is to put the cheapest filter first and
-drop everything it considers normal. That is what the first version of this
-project did, and it was wrong in a way worth describing, because the same mistake
-is easy to make in any tiered system.
+The tool reads a ledger of bank transactions and works out which ones look like money laundering. Quick rules and statistics pick out the suspicious transactions, an AI model reviews those against anti-money-laundering guidance, and a compliance officer must approve before a Suspicious Activity Report (SAR) is drafted. Every decision is recorded in an audit log.
 
-An `IsolationForest` fitted on transaction amount discards anything whose amount
-is statistically ordinary. Structuring — splitting a large sum into legs just
-under the reporting threshold — is *defined* by amounts that look ordinary. The
-optimisation designed to save money was deleting the fraud the later tiers
-existed to catch, and a `$500` transfer from a sanctioned jurisdiction never
-reached the country check because it had already been dropped on amount alone.
+## Why it's harder than it sounds
 
-The fix is ordering, not tuning. Deterministic compliance rules run **before**
-the statistical funnel and set a force-review flag the funnel is not permitted to
-override. Cost optimisation never outranks a compliance rule.
+Banks handle huge numbers of transactions. Having an AI model review every one would be slow and expensive, but filtering too aggressively lets real laundering slip through unseen. Laundering is also designed to look ordinary: a large sum is split into transfers just under the reporting limit, or money is passed around a circle of accounts until its origin is hard to trace. The challenge is narrowing the list down cheaply without throwing away the cases that matter.
 
-Measured on `data/sample_ledger_labelled.csv` (465 rows, 45 labelled laundering
-transactions across six typologies), via `python scripts/evaluate.py`. That
-file is gitignored (generated, not checked in); run
-`python scripts/generate_sample_ledger.py` first to reproduce it - the
-generator uses a fixed seed, so a fresh clone gets byte-identical data and
-these exact numbers:
+## How it works
 
-| Pipeline | Recall | Precision | F1 | Forwarded to LLM |
-|---|---|---|---|---|
-| Original ordering | 7% | 33% | 0.11 | 9 rows (2%) |
-| Current ordering | 84% | 79% | 0.82 | 48 rows (10%) |
+1. **Rules** flag the obvious cases: names on sanctions lists, high-risk countries, and amounts split to stay just under the reporting limit.
+2. **A pattern model** looks at how each account behaves and flags the unusual ones.
+3. **An AI model** reviews the flagged transactions against compliance guidance and gives a clear verdict.
+4. **A network check** looks for money travelling in a circle through several accounts.
+5. **A compliance officer** makes the final decision, and every step is written to an audit log.
 
-Per typology:
+## Results
 
-| Pattern | Rows | Recall (current) | Recall (original) | Caught by |
-|---|---|---|---|---|
-| structuring | 10 | 100% | 0% | Tier 1 rule (structuring band) |
-| sanctioned | 6 | 100% | 0% | Tier 1 rule (high-risk jurisdiction) |
-| fan_in | 11 | 100% | 0% | Tier 0 (ML funnel) - no rule reaches it |
-| circular | 3 | 100% | 100% | Tier 1 rule (amount ≥ $10,000) |
-| circular_small | 7 | 100% | 0% | Tier 0 (ML funnel) - but see the caveat below |
-| circular_camouflaged | 8 | 12% (1/8) | 0% | Coincidence, not detection - see below |
+Measured on a synthetic ledger of 465 transactions, 45 of them labelled as laundering:
 
-`scripts/evaluate.py` prints this same breakdown for both pipelines side by
-side, so it's reproducible from the same command as the summary table above.
-
-CI gates on this ledger
-(`python scripts/evaluate.py --min-recall 1.0 --min-pattern-recall 1.0 --gate-exclude circular_camouflaged`,
-enforced in `.github/workflows/ci.yml`) and fails the build if recall on any
-*gated* typology drops below 100%. `circular_camouflaged` is deliberately
-excluded from that gate via `--gate-exclude` - not because it doesn't matter,
-but because failing CI on a known gap nothing has fixed yet just trains people
-to ignore red builds. It is still printed in every report, uncensored, so the
-gap stays visible instead of disappearing into a passing build. Separately,
-**pytest and the eval gate catch different regressions** - pytest's rule
-tests fail when a compliance rule breaks even if the ML tier compensates for
-it, and the eval gate fails when the ML tier degrades even if every rule test
-still passes; each alone has a blind spot the other one covers.
-
-**`circular_small` is caught because its accounts are new, not because of
-cycle detection.** Its rows are one-off accounts (`Loop0-0`, `Loop1-2`, ...)
-that transact exactly once each in the whole batch; Tier 0 flags them for
-looking unlike the repeat-business background on transaction-count and volume
-features, not because any feature encodes "this is a cycle." A launderer
-routing the same amounts through accounts that already have ordinary history
-would not trip this.
-
-**`circular_camouflaged` tests exactly that, and mostly gets through.** Same
-ring shape, built from businesses that already appear throughout the "clean"
-background with normal repeat activity, at that same amount distribution,
-spread over roughly ten days. The pipeline forwards 1 of 8 rows, and only by
-coincidence: its random amount ($9,210.86) landed in the structuring band, so a
-Tier 1 rule caught it, not the ring. The other seven blend in completely and
-are missed. See Known limitations.
-
-What each column in the summary table means, in plain terms:
-
-- **Recall** - of the 45 rows actually labelled laundering, the percentage the
-  pipeline forwarded to a human/LLM instead of silently dropping. This is the
-  number that matters most here: a missed row is never looked at again.
-- **Precision** - 79% means about 4 of every 5 forwarded rows are real
-  laundering; the rest are false alarms an analyst has to clear.
-- **F1** - the harmonic mean of recall and precision, a single number for
-  comparing the two pipelines when both figures moved. It is not independently
-  meaningful; read recall and precision first.
-- **Forwarded to LLM** - the row count and share of the 465-row batch that
-  reached Tier 2 (the compliance LLM tier is the expensive step this whole
-  funnel exists to gate). Higher recall costs more forwarded rows.
-
-**Caveat: this is not an independent benchmark.** The same person who wrote
-`utils/features.py` (what the funnel looks for) also wrote
-`scripts/generate_sample_ledger.py` (the patterns injected into the labelled
-data) and `utils/rules.py` (the thresholds). A 100% recall on a gated typology
-shows the funnel catches the failure modes it was explicitly built to catch on
-data shaped by the same assumptions - it is evidence the fix works as
-designed, not evidence it generalises to laundering patterns nobody
-anticipated, adversarial ledgers, or a real production distribution.
-`circular_camouflaged`'s 12% is the concrete demonstration of that limit: the
-same author built both sides, and the pipeline still misses it. Treat the
-gated numbers as a regression guard against reintroducing the original bug,
-not as a claim about real-world detection rates.
-
-**Benchmark change: `circular_small` amounts.** The generator used to draw
-each `circular_small` leg independently from $3,000-$7,000, so a "ring" could
-grow 57% in one lap. Real round-tripped money doesn't do that. Each hop now
-forwards 90-100% of the previous leg. Same seed and same number of random
-draws, so only 5 rows changed (the non-first legs of the two rings) and
-every other typology is byte-identical. The **data** changed here, not only
-the detector, so both are shown separately.
-
-Funnel recall (`scripts/evaluate.py`, Tiers 0+1) is unchanged per typology:
-
-| Pattern | Before | After |
-|---|---|---|
-| structuring | 10/10 | 10/10 |
-| sanctioned | 6/6 | 6/6 |
-| fan_in | 11/11 | 11/11 |
-| circular | 3/3 | 3/3 |
-| circular_small | 7/7 | 7/7 |
-| circular_camouflaged | 1/8 | 1/8 |
-| clean (false positives) | 10/420 | 10/420 |
-
-Tier 3 circular-flow findings (rows whose topology audit reports circular
-flow, auditing every row against the full ledger):
-
-| Pattern | Shape-only, old data | Fund-flow, old data | Fund-flow, new data |
+| Pipeline | Laundering caught (recall) | Flags that were real (precision) | Sent to the AI model |
 |---|---|---|---|
-| clean (false positives) | 420/420 | 25/420 | 25/420 |
-| circular | 3/3 | 3/3 | 3/3 |
-| circular_small | 7/7 | 0/7 | 7/7 |
-| circular_camouflaged | 8/8 | 0/8 | 0/8 |
+| Original order (statistics first) | 7% | 33% | 9 rows |
+| Current order (rules first) | 84% | 79% | 48 rows |
 
-`circular_small` drops to 0/7 on the old data only because its legs fail the
-amount tolerance. The remaining 25 clean rows are coincidences in the random
-background (11 two-way pairs and one 3-account ring, where opposite-direction
-trades of similar size happen to land within a day). Nothing in the data
-separates them from a real quick round trip. `circular_camouflaged` is 0/8:
-its legs are about two days apart with unrelated amounts, so under these
-rules it is not a fund-flow ring. Nothing was tuned to raise it.
+By type of laundering:
+
+| Pattern | What it looks like | Caught |
+|---|---|---|
+| structuring | One large sum split into transfers just under the $10,000 limit | 10 of 10 |
+| sanctioned | Transfers involving a high-risk jurisdiction | 6 of 6 |
+| fan_in | Many accounts sending money into one account | 11 of 11 |
+| circular | Money sent around a loop in large amounts | 3 of 3 |
+| circular_small | The same loop in smaller amounts, through new accounts | 7 of 7 |
+| circular_camouflaged | The same loop through established businesses | 1 of 8 (known gap) |
+
+The same author wrote both the detector and the test data, so treat these numbers as a regression check rather than a real-world detection rate. The method, the caveats and the reasoning behind each number are in [docs/EVALUATION.md](docs/EVALUATION.md).
 
 ## Architecture
 
@@ -155,14 +52,13 @@ graph TD
     D -->|normal| E[Dropped, logged]
     F --> G[Tier 2: RAG compliance assessment<br/>structured verdict]
     G --> N[Investigative ledger<br/>every verdict recorded: SUSPICIOUS / CLEAR / ERROR]
-    N -->|analyst selects any flagged row| H[Tier 3: LangGraph topology agent]
+    N -->|analyst selects any row| H[Tier 3: LangGraph topology agent]
     H --> I{Topology score >= 70?}
     I -->|yes| J[Execution pauses for officer]
     I -->|no| R[Forensic summary]
     J -->|reject| L[Escalate, no filing]
-    J -->|approve| R
-    N -->|any SUSPICIOUS row| O[Officer review<br/>approve / reject / escalate]
     J -->|approve| K[SAR drafting]
+    N -->|any SUSPICIOUS row| O[Officer review<br/>approve / reject / escalate]
     O -->|approve| K
     O -->|reject / escalate| L
     K --> M[Durable audit trail]
@@ -170,232 +66,89 @@ graph TD
     N --> M
 ```
 
-Tier 3 is not automatically gated on the Tier 2 verdict: every assessed row, whatever
-its verdict, lands in the investigative ledger, and the analyst manually picks any
-one of them to run the topology agent — a CLEAR-verdicted row can still be sent
-through it.
+- **Tier 1, rules** (`utils/rules.py`): reporting threshold, the structuring band just below it, high-risk jurisdictions, fuzzy sanctions-name matching and unidentified counterparties. A rule hit always forces a review.
+- **Tier 0, behaviour model** (`utils/funnel.py`, `utils/features.py`): twelve account-behaviour features scored against the batch's own median.
+- **Tier 2, AI review** (`utils/agents.py`): retrieval-grounded analysis with a structured verdict. Runs on Claude Haiku 4.5 (Amazon Bedrock) or Gemini 2.5 Flash (Google Vertex AI), switchable in config.
+- **Tier 3, network check** (`utils/graph_nodes.py`, `utils/graph_logic.py`): circular flows, account velocity and hidden beneficiaries, over the full ledger. A high score pauses for an officer.
 
-A SAR is never drafted from a verdict or a score alone: it needs an officer
-approval recorded in the audit trail, from either the topology pause or the
-officer review available on every SUSPICIOUS row.
+## Design decisions
 
-**Tier 1, deterministic rules** (`utils/rules.py`). Reporting threshold, the
-structuring band below it, high-risk and secrecy jurisdictions, sanctions
-screening (RapidFuzz fuzzy name match, flags at 88% similarity or above), and
-unidentified counterparties. Runs first; a hit is binding. RapidFuzz is
-required, not optional: without it screening fails closed and the batch is
-not audited, rather than every name passing as "no match".
+**Rules come before statistics.** Laundering is often designed to look ordinary, so a statistical filter on its own throws it away. Rules run first, and anything they flag is always reviewed.
+*Technical:* a rule hit sets a force-review flag the anomaly funnel can't override. With the original ordering, recall on the labelled set was 7%; with rules first it is 84%.
 
-**Tier 0, behavioural funnel** (`utils/funnel.py`, `utils/features.py`). Twelve
-features describing how an account behaves across the batch — per-sender
-velocity, transactions in the structuring band, counterparty fan-out and fan-in,
-round-number ratio, corridor rarity — rather than the amount alone. The flag
-threshold is a robust z-score against the batch's own median and MAD, so a clean
-batch flags nothing. `contamination` is deliberately unused: it is a fixed quota
-that flags 15% of a clean batch and drops 85% of a fraudulent one.
+**Behaviour matters more than amount.** An account is judged by how it acts: how fast it moves money, how many parties it deals with, how often it sits just under the limit.
+*Technical:* twelve behavioural features, flagged with a robust z-score against the batch's own median, instead of a fixed "flag 15%" quota.
 
-**Tier 2, compliance assessment** (`utils/agents.py`). Retrieval-grounded
-analysis followed by an independent structured review. Verdicts come back through
-a constrained schema, never by keyword-matching prose. The chat model is a
-config switch (`utils/llm_provider.py`), not a rewrite: **Claude Haiku 4.5 on
-Amazon Bedrock** by default, or **Gemini 2.5 Flash on Google Vertex AI** with
-`MODEL_PROVIDER=vertex`. Both must support tool calling, because the verdict
-comes back through `with_structured_output`.
+**The AI answers in a fixed format.** The model's verdict is one of a few set answers, not free text that has to be interpreted.
+*Technical:* structured output with SUSPICIOUS, CLEAR or ERROR. An ERROR is never treated as clear.
 
-**Tier 3, topology** (`utils/graph_nodes.py`, `utils/graph_logic.py`). Circular
-flows, account velocity, and beneficiary obfuscation, over the full loaded
-ledger rather than only the rows the funnel forwarded. Circular flow models
-fund flow, not graph shape: a cycle of 2-6 accounts counts only if it includes
-the audited transaction, its legs run forward in time, it completes within
-`CYCLE_MAX_WINDOW_DAYS`, and its leg amounts differ by at most
-`CYCLE_AMOUNT_TOLERANCE`. (Shape alone flagged every background row, because
-businesses that trade both ways form graph cycles constantly.) **The defaults,
-1 day and 20%, were tuned on the synthetic sample ledger only and are
-provisional until validated on the IBM AML dataset in a later validation pass.** A ledger with
-no timestamps falls back to shape-only cycles and the finding says so. Scoring
-is per unique counterparty and capped, so the result reflects network shape
-rather than how many rows were uploaded.
+**Following the money around a circle.** A loop only counts if the money actually travels it: one transfer after another, within a short time, with similar amounts.
+*Technical:* time-ordered cycles of 2 to 6 accounts that include the audited transaction, within a configurable window (default 1 day) and amount tolerance (default 20%). On the sample data this cut false alarms on clean transactions from 420 of 420 to 25 of 420.
 
-**Human review.** A topology score of 70 or above (out of 100) pauses execution
-via LangGraph's `interrupt_before`. Approval records the officer, timestamp,
-decision, and note; rejection routes to escalation and produces no filing.
-Any SUSPICIOUS row can also get an officer decision (approve, reject or
-escalate) from the SAR tab, whatever its topology score. Compliance actions
-(LLM verdicts, officer decisions, SAR drafts, sanctions matches) are written
-to the audit trail before they take effect. If that write fails, the action
-is blocked rather than going ahead unrecorded.
+**A person signs off, and everything is recorded.** No report is drafted on the AI's word alone, and nothing happens without a record.
+*Technical:* SAR drafting requires an officer approval in the audit log. Sanctions screening refuses to run if its matcher is missing, and compliance events are written before the action takes effect.
 
-## Requirements
+## Tech stack
 
-Verified against **Python 3.14.4** on **Windows 11 (build 10.0.26200)**. On this
-version, `SQLAlchemy` (a `langchain-community` dependency) has no prebuilt wheel
-yet, so pip builds it from source on install; that needs no action from you, but
-it does mean the first install is slower and briefly pulls build tooling.
+| Area | Tools |
+|---|---|
+| Language and UI | Python, Streamlit |
+| AI and agents | LangChain, LangGraph, Claude Haiku 4.5 on Amazon Bedrock, Gemini 2.5 Flash on Google Vertex AI, Pydantic structured output |
+| Retrieval | Qdrant vector store, PDF ingestion of AML guidance |
+| Data and ML | pandas, NumPy, scikit-learn |
+| Graph and matching | NetworkX (cycle detection), RapidFuzz (sanctions name matching) |
+| Storage | SQLite append-only audit log with evidence hashes |
+| Testing and delivery | pytest, Streamlit AppTest, Docker (multi-stage, non-root), GitHub Actions with an evaluation gate |
 
-## Setup
+## Quick start
 
-1. Clone the repo:
-
-   ```bash
-   git clone https://github.com/vinaykumar101997/Fintech-Fraud-Auditor-Pro.git
-   cd Fintech-Fraud-Auditor-Pro
-   ```
-
-2. Create and activate a virtualenv:
-
-   ```bash
-   python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
-   ```
-
-3. Install dependencies:
-
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-   `requirements.txt` pins ranges wide enough to resolve (the tightly-coupled
-   `langchain`/`langgraph` cluster in particular needs room to find mutually
-   compatible versions). `requirements.lock.txt` is `pip freeze` output from a
-   known-working install and reproduces that exact set:
-
-   ```bash
-   pip install -r requirements.lock.txt
-   ```
-
-   Only running the offline test/eval path (no Streamlit app, no LLM tier)?
-   `requirements-dev.txt` installs the much smaller set that needs - see
-   Commands below.
-
-4. Configure the environment:
-
-   ```bash
-   cp .env.example .env       # then edit it
-   ```
-
-   Authentication depends on `MODEL_PROVIDER`, and the two are not
-   interchangeable:
-
-   - **`bedrock` (default, AWS).** Credentials come from the standard boto3
-     chain, not from gcloud: `aws configure sso` (recommended) or `aws configure`
-     locally, or an IAM role with no action needed in production (EC2 instance
-     profile, ECS task role, App Runner instance role). Full walkthrough,
-     including the Bedrock model-access step every account needs once, in
-     `SETUP_AWS.md`.
-   - **`vertex` (GCP).** Authentication uses Application Default Credentials:
-     run `gcloud auth application-default login` locally, or Workload Identity
-     in production. Full walkthrough in `SETUP.md`.
-
-   Neither path needs a service-account key or an access key committed to the
-   project root — see `.dockerignore` and `scripts/preflight.py`, which checks
-   for exactly that.
-
-5. Generate the sample ledger and run the app:
-
-   ```bash
-   python scripts/generate_sample_ledger.py
-   streamlit run app.py
-   ```
-
-   The app runs without the LLM backends: rules and the funnel still execute,
-   and the UI says so rather than presenting a blank result.
-
-6. Optional: index the regulatory corpus before using the compliance tier:
-
-   ```bash
-   python scripts/ingest_pdf.py --file data/aml_guidelines.pdf
-   ```
-
-## Commands
-
-Tests and the funnel evaluation touch only `utils/rules.py`, `utils/funnel.py`,
-`utils/features.py`, `utils/data_loader.py`, `utils/graph_nodes.py`,
-`utils/screening.py`, `utils/sanitize.py`, `utils/verdicts.py`,
-`utils/sar_gate.py`, and `utils/audit_log.py` - none of which import the
-LLM/vector-store stack, so
-`pip install -r requirements-dev.txt` is enough to run everything below
-without `requirements.txt`. This is what `.github/workflows/ci.yml` installs.
-The exception is `tests/test_app.py` (Streamlit `AppTest` smoke tests with a
-fake model provider), which needs `requirements.txt` and is skipped without it.
+Tested on Python 3.12 (CI) and 3.14 (local, Windows 11). On 3.14 the first install is slower because SQLAlchemy builds from source.
 
 ```bash
-pytest tests/ -v                        # 94 offline regression tests, no network,
-                                        # plus 8 app smoke tests (full install only)
-
-# data/sample_ledger*.csv are gitignored (generated, not checked in) - build
-# them before evaluating. generate_sample_ledger.py uses a fixed seed (7), so
-# this is deterministic: a fresh clone reproduces the labelled ledger byte-for-
-# byte, which is what the recall/precision/F1 numbers above were measured on.
+git clone https://github.com/vinaykumar101997/Fintech-Fraud-Auditor-Pro.git
+cd Fintech-Fraud-Auditor-Pro
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -r requirements.txt                      # or requirements.lock.txt for exact versions
+cp .env.example .env                                 # then edit it
 python scripts/generate_sample_ledger.py
-python scripts/evaluate.py              # per-typology recall and precision
-python scripts/evaluate.py --with-llm   # include the live compliance tier
-
-# what CI actually runs: fails the build below 100% recall on any typology
-# except circular_camouflaged, a known gap tracked in Known limitations
-python scripts/evaluate.py --min-recall 1.0 --min-pattern-recall 1.0 \
-    --gate-exclude circular_camouflaged
-
-python scripts/check_json.py --file data/transactions.json
-python -m utils.chat_agent              # interactive corpus query
+streamlit run app.py
 ```
 
-## What was fixed
+The app runs without the AI backends: rules and the behaviour model still work, and the UI says the AI tier is unavailable. To enable it, set up credentials for Amazon Bedrock ([SETUP_AWS.md](SETUP_AWS.md)) or Google Vertex AI ([SETUP.md](SETUP.md)). Neither needs a key file in the project folder.
 
-| Area | Issue | Resolution |
-|---|---|---|
-| Funnel order | ML filter ran before compliance rules and discarded structuring | Rules first, with a binding force-review flag |
-| Features | `IsolationForest` fitted on amount alone | Twelve behavioural features (`utils/features.py`) |
-| Threshold | `contamination=0.15` flagged a fixed 15% regardless of data | Robust MAD z-score with a rate ceiling |
-| Error handling | Exceptions returned a string that keyword-matched to CLEAR | `Verdict.ERROR`, never treated as cleared |
-| Verdicts | Substring search matched "no indication of money laundering" | Constrained Pydantic schema |
-| Risk score | `+50` per matching row, no dedup or cap; five rows scored 250 | Per unique counterparty, capped, clamped |
-| Graph state | Nodes mutated checkpointed state in place | Copy before mutate |
-| HITL | Approval node was `lambda state: state` | Records officer, timestamp, decision; rejection path added |
-| Sessions | One global graph, thread IDs from transaction IDs | Shared graph, session-namespaced threads |
-| Singleton | Cached a half-built object when init failed | Assign only after success |
-| Money | `float()` on `"$50,000"` raised | `Decimal` throughout, currency parser at the boundary |
-| Input validation | Missing columns raised raw `KeyError` | Schema check with actionable messages |
-| Prompt injection | Ledger fields interpolated into prompts | Scrubbing, fencing, and structured output |
-| Secrets | `COPY . .` baked `.env` and `gcp-key.json` into the image | `.dockerignore`, ADC, no key in the build context |
-| Container | Ran as root with build tools in the final layer | Multi-stage, non-root, healthcheck |
-| Screening | Six hardcoded names, LLM-authored freeze directives | CSV watchlist with aliases, templated directives |
-| Audit trail | Everything in session state, lost on refresh | SQLite append-only log with evidence hashes |
-| Tests | Benchmarked a code path the app never ran | 94 offline tests and 8 app smoke tests, plus a labelled evaluation set |
-| Dependencies | `langchain-text-splitters` missing; 4 unused pins | Declared and pruned |
+Optional: index an AML guidance PDF for the AI review tier:
+
+```bash
+python scripts/ingest_pdf.py --file path/to/aml_guidelines.pdf
+```
+
+## Running tests and the evaluation
+
+`requirements-dev.txt` is enough for the tests and the evaluation; it skips the AI and UI libraries.
+
+```bash
+pytest tests/ -v                          # 94 offline tests, plus 8 app tests with the full install
+python scripts/generate_sample_ledger.py  # fixed seed, so the numbers above reproduce exactly
+python scripts/evaluate.py                # recall and precision by laundering type
+python scripts/evaluate.py --min-recall 1.0 --min-pattern-recall 1.0 \
+    --gate-exclude circular_camouflaged   # what CI runs
+```
 
 ## Known limitations
 
-This is a prototype and the following are real gaps, not oversights:
-
-- **`MemorySaver` loses paused cases on restart.** For durable HITL pauses,
-  install `langgraph-checkpoint-postgres` and pass it to
-  `build_compliance_graph()`.
-- **The bundled watchlist is a demo file.** Replace
-  `data/sanctions_list.csv` with an OFAC SDN export. Name matching alone is not
-  identity verification; confirm against date of birth and nationality.
-- **Ledgers without timestamps fall back to shape-only cycle detection.**
-  With no timing to check, any two businesses that trade both ways form a
-  "cycle", so circular-flow findings over-flag them (shape-only flagged
-  420/420 clean rows of the sample ledger). The finding says when it is
-  shape-only.
-- **SQLite is single-node.** Move to Postgres with append-only enforcement at the
-  database level before this is an audit record anyone should rely on.
-- **Streamlit is synchronous.** Batches of a few thousand rows are fine; beyond
-  that, move the LLM tier behind a queue.
-- **Low-value cycles through established accounts are not caught before Tier
-  3, which only runs on analyst-selected rows.** `circular_camouflaged` in the
-  evaluation set (see above) shows this concretely: Tier 0's twelve features
-  describe account behaviour, not network structure, so a ring built from
-  accounts that already have ordinary history and ordinary-sized legs blends
-  into the background almost completely (12% recall, and even that hit was
-  coincidence). Real cycle detection exists (`utils/graph_nodes.py`, Tier 3)
-  but only runs when an analyst manually selects a row to investigate - and a
-  row that nothing upstream forwards is never selected. Even when selected,
-  its fund-flow check does not flag these rings (legs days apart, unrelated
-  amounts).
+- **Synthetic data only.** The results come from generated data. Laundering rings routed through established businesses (`circular_camouflaged`) are mostly missed.
+- **Cycle thresholds are provisional.** The 1-day window and 20% amount tolerance were tuned on the synthetic ledger and still need checking against the IBM AML dataset.
+- **Ledgers without timestamps fall back to shape-only cycle detection,** which over-flags businesses that trade in both directions. The finding says when this happens.
+- **The network check only runs on rows an analyst selects.** A ring that nothing upstream flags is never examined.
+- **Paused cases are lost on restart.** LangGraph's `MemorySaver` is in-memory; a Postgres checkpointer would make pauses durable.
+- **The sanctions list is a demo file.** Replace `data/sanctions_list.csv` with an OFAC export, and confirm matches against date of birth and nationality.
+- **SQLite is single-node, and Streamlit is synchronous.** Fine for a few thousand rows; larger batches need Postgres and a job queue.
 
 ## Roadmap
 
-- Decoupled FastAPI backend with Celery for topology traversal
+- Validate the cycle thresholds and recall on the IBM AML dataset
+- Evaluate the AI tier: verdict accuracy, faithfulness of SAR drafts, cost and latency
+- FastAPI backend with a job queue
 - Postgres checkpointer and audit log
 - Analyst feedback loop to tune thresholds against confirmed outcomes
 
