@@ -8,6 +8,8 @@ import os
 from decimal import Decimal
 from pathlib import Path
 
+from utils.jurisdictions import parse_jurisdiction_list
+
 PROJECT_ROOT = Path(__file__).resolve().parent
 DATA_DIR = PROJECT_ROOT / "data"
 AUDIT_DB_PATH = Path(os.getenv("AUDIT_DB_PATH", DATA_DIR / "audit_log.sqlite3"))
@@ -71,24 +73,19 @@ REPORTING_THRESHOLD = Decimal(os.getenv("REPORTING_THRESHOLD", "10000"))
 # band the original build discarded, and it is where structuring lives.
 STRUCTURING_FLOOR = Decimal(os.getenv("STRUCTURING_FLOOR", "8000"))
 
-HIGH_RISK_COUNTRIES = [
-    c.strip().lower()
-    for c in os.getenv(
-        "HIGH_RISK_COUNTRIES",
-        "Russia,North Korea,Iran,Syria,Belarus,Myanmar,Afghanistan",
-    ).split(",")
-    if c.strip()
-]
+# Jurisdiction lists hold ISO 3166-1 alpha-2 codes. Ledger countries are
+# resolved to a code (utils/jurisdictions.py) and compared exactly. An override
+# may use codes or names; an entry that does not resolve stops startup.
+# Russia, North Korea, Iran, Syria, Belarus, Myanmar, Afghanistan.
+HIGH_RISK_COUNTRIES = parse_jurisdiction_list(
+    os.getenv("HIGH_RISK_COUNTRIES", "RU,KP,IR,SY,BY,MM,AF")
+)
 
-# Jurisdictions that are not sanctioned but carry elevated secrecy risk.
-SECRECY_JURISDICTIONS = [
-    c.strip().lower()
-    for c in os.getenv(
-        "SECRECY_JURISDICTIONS",
-        "Cayman Islands,Panama,Seychelles,British Virgin Islands,Vanuatu",
-    ).split(",")
-    if c.strip()
-]
+# Not sanctioned, but elevated secrecy risk: Cayman Islands, Panama,
+# Seychelles, British Virgin Islands, Vanuatu.
+SECRECY_JURISDICTIONS = parse_jurisdiction_list(
+    os.getenv("SECRECY_JURISDICTIONS", "KY,PA,SC,VG,VU")
+)
 
 PLACEHOLDER_ENTITIES = {"unknown_entity", "internal_wallet", "", "nan", "none"}
 

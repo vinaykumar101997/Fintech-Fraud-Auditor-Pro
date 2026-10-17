@@ -49,6 +49,7 @@ PyMuPDF==1.27.2.2
 # --- Utilities ---
 pydantic==2.13.2
 rapidfuzz==3.6.1
+pycountry==26.2.16   # ISO 3166 country codes for the jurisdiction rules
 
 # --- Development ---
 pytest==8.3.4

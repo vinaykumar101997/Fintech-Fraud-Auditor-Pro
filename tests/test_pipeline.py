@@ -88,6 +88,80 @@ def test_ordinary_domestic_transaction_is_not_flagged():
     assert not evaluate_row(Decimal("420"), "USA", "Acme Ltd", "Bravo Ltd").force_review
 
 
+# --- jurisdictions ---------------------------------------------------------
+def _has(result, text):
+    return any(text in r for r in result.reasons)
+
+
+def _rules(country, amount="500"):
+    """Named parties, so only the amount and country rules can fire."""
+    return evaluate_row(Decimal(amount), country, "Acme Ltd", "Bravo Ltd")
+
+
+@pytest.mark.parametrize("country", [
+    "RU", "ru", "RUS", "Russia", "Russian Federation",
+    "KP", "DPRK", "North Korea", "Korea, North",
+    "MM", "Burma", "Myanmar",
+    "IR", "Iran", "SY", "Syria", "BY", "Belarus", "AF", "Afghanistan",
+])
+def test_listed_jurisdiction_is_flagged_by_code_or_name(country):
+    result = _rules(country)
+    assert result.force_review
+    assert _has(result, "high-risk list")
+
+
+@pytest.mark.parametrize("country", ["KY", "Cayman Islands", "VG", "British Virgin Islands",
+                                     "BVI", "PA", "Panama", "SC", "VU"])
+def test_secrecy_jurisdiction_is_flagged_by_code_or_name(country):
+    result = _rules(country)
+    assert result.force_review
+    assert _has(result, "secrecy jurisdiction")
+
+
+@pytest.mark.parametrize("country", ["Prussia", "Russiaville", "White Russia Road",
+                                     "Iranian Plateau", "Syriana", "Panamanian Way"])
+def test_place_names_containing_a_listed_name_are_not_flagged(country):
+    result = _rules(country)
+    assert not result.force_review
+    assert not _has(result, "high-risk list")
+    assert not _has(result, "secrecy jurisdiction")
+
+
+@pytest.mark.parametrize("country", ["", "   ", None, "nan", "Atlantis", "??", "Prussia"])
+def test_unresolved_country_adds_a_low_severity_reason_without_flagging(country):
+    result = _rules(country)
+    assert _has(result, "Unresolved jurisdiction")
+    assert not result.flagged
+    assert not result.force_review
+
+
+def test_unresolved_country_does_not_hide_other_rule_hits():
+    result = _rules("", "9400")
+    assert result.force_review
+    assert _has(result, "structuring band")
+    assert _has(result, "Unresolved jurisdiction")
+
+
+def test_resolved_country_adds_no_jurisdiction_reason():
+    assert _rules("Germany").reasons == []
+
+
+def test_jurisdiction_lists_are_iso_alpha2_codes():
+    import pycountry
+
+    for code in set(config.HIGH_RISK_COUNTRIES) | set(config.SECRECY_JURISDICTIONS):
+        assert len(code) == 2 and code.isupper()
+        assert pycountry.countries.get(alpha_2=code) is not None, code
+
+
+def test_jurisdiction_env_override_accepts_codes_and_names_and_rejects_unknowns():
+    from utils.jurisdictions import parse_jurisdiction_list
+
+    assert parse_jurisdiction_list("RU, North Korea,burma") == frozenset({"RU", "KP", "MM"})
+    with pytest.raises(ValueError, match="Prussia"):
+        parse_jurisdiction_list("RU,Prussia")
+
+
 def test_rules_override_a_normal_ml_score():
     """The funnel must not drop a row a rule flagged, whatever the model says."""
     rows = [{"transaction_id": f"N{i}", "amount": Decimal("500"),
