@@ -137,6 +137,7 @@ python scripts/evaluate.py --min-recall 1.0 --min-pattern-recall 1.0 \
 ## Known limitations
 
 - **Synthetic data only.** The results come from generated data. Laundering rings routed through established businesses (`circular_camouflaged`) are mostly missed.
+- **Sanctions-name matching isn't measured by the evaluation.** No generated name is on the watchlist, so the `sanctioned` pattern is caught only by the country rule; fuzzy name matching is covered by unit tests, not by recall figures.
 - **Cycle thresholds are provisional.** The 1-day window and 20% amount tolerance were tuned on the synthetic ledger and still need checking against the IBM AML dataset.
 - **Ledgers without timestamps fall back to shape-only cycle detection,** which over-flags businesses that trade in both directions. The finding says when this happens.
 - **The network check only runs on rows an analyst selects.** A ring that nothing upstream flags is never examined.
