@@ -17,13 +17,15 @@ a constrained schema, so an injected instruction has no free-text channel to
 express itself through.
 
 The patterns below only match plain ASCII English. Homoglyphs, zero-width
-characters and instructions in other languages pass through unchanged, and a
-field can contain the closing </transaction_record> tag. Treat this module as
-a secondary layer; tests/test_prompt_injection.py checks the controls that hold.
+characters and instructions in other languages pass through unchanged. Field
+values are HTML-escaped inside the fence, so they cannot close it. Treat this
+module as a secondary layer; tests/test_prompt_injection.py checks the
+controls that hold.
 """
 
 from __future__ import annotations
 
+import html
 import re
 from typing import Mapping
 
@@ -55,8 +57,12 @@ def scrub(value, max_length: int = MAX_FIELD_LENGTH) -> str:
 
 
 def build_evidence_block(fields: Mapping[str, object]) -> str:
-    """Render untrusted fields inside an explicit, labelled fence."""
-    lines = [f"- {key}: {scrub(val)}" for key, val in fields.items()]
+    """Render untrusted fields inside an explicit, labelled fence.
+
+    Values are HTML-escaped (&, < and >) after scrubbing, so no field can
+    open or close a tag, including </transaction_record> itself.
+    """
+    lines = [f"- {key}: {html.escape(scrub(val), quote=False)}" for key, val in fields.items()]
     return (
         "<transaction_record>\n"
         + "\n".join(lines)
