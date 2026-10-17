@@ -19,7 +19,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import config
 
@@ -103,6 +103,12 @@ def load_watchlist() -> Tuple[Tuple[WatchlistEntry, ...], bool]:
     return tuple(entries), using_real_list
 
 
+@lru_cache(maxsize=4)
+def _choices(entries: Tuple[WatchlistEntry, ...]) -> Tuple[str, ...]:
+    """Normalised watchlist names, built once per loaded list."""
+    return tuple(e.normalized for e in entries)
+
+
 def screen(name: str, threshold: Optional[int] = None) -> Optional[ScreeningHit]:
     """Fuzzy-match a name against the watchlist. Returns None below threshold."""
     from rapidfuzz import fuzz, process  # imported lazily so tests can run without it
@@ -116,8 +122,8 @@ def screen(name: str, threshold: Optional[int] = None) -> Optional[ScreeningHit]
     if not entries:
         return None
 
-    choices: Sequence[str] = [e.normalized for e in entries]
-    match = process.extractOne(query, choices, scorer=fuzz.token_sort_ratio, score_cutoff=cutoff)
+    match = process.extractOne(query, _choices(entries), scorer=fuzz.token_sort_ratio,
+                               score_cutoff=cutoff)
     if match is None:
         return None
 
@@ -128,6 +134,48 @@ def screen(name: str, threshold: Optional[int] = None) -> Optional[ScreeningHit]
     )
 
 
+def screen_many(
+    names: Iterable[str], threshold: Optional[int] = None
+) -> Dict[str, Optional[ScreeningHit]]:
+    """Screen many names in one pass; the result for each name equals screen(name).
+
+    Each distinct normalised name is scored against the whole watchlist with a
+    single rapidfuzz cdist call instead of one extractOne call per ledger row.
+    Ties go to the first watchlist entry, as with extractOne.
+    """
+    from rapidfuzz import fuzz, process  # imported lazily so tests can run without it
+    import numpy as np
+
+    cutoff = config.SCREENING_MATCH_THRESHOLD if threshold is None else threshold
+    unique = list(dict.fromkeys(names))
+    results: Dict[str, Optional[ScreeningHit]] = {name: None for name in unique}
+
+    entries, _ = load_watchlist()
+    by_query: Dict[str, List[str]] = {}
+    for name in unique:
+        query = normalize_name(name)
+        if query:
+            by_query.setdefault(query, []).append(name)
+    if not entries or not by_query:
+        return results
+
+    queries = list(by_query)
+    # float64 so scores compare exactly with extractOne's at the threshold.
+    scores = process.cdist(queries, _choices(entries), scorer=fuzz.token_sort_ratio,
+                           score_cutoff=cutoff, dtype=np.float64)
+    for query, row in zip(queries, scores):
+        index = int(row.argmax())
+        score = float(row[index])
+        if score < cutoff:
+            continue
+        entry = entries[index]
+        for name in by_query[query]:
+            results[name] = ScreeningHit(
+                query=name, matched_name=entry.canonical, score=score, entry_type=entry.entry_type
+            )
+    return results
+
+
 def best_effort_match(name: str) -> Optional[Tuple[str, float]]:
     """Highest-scoring candidate regardless of threshold, for UI transparency."""
     from rapidfuzz import fuzz, process
@@ -136,7 +184,7 @@ def best_effort_match(name: str) -> Optional[Tuple[str, float]]:
     entries, _ = load_watchlist()
     if not query or not entries:
         return None
-    match = process.extractOne(query, [e.normalized for e in entries], scorer=fuzz.token_sort_ratio)
+    match = process.extractOne(query, _choices(entries), scorer=fuzz.token_sort_ratio)
     if match is None:
         return None
     _, score, index = match
@@ -145,6 +193,14 @@ def best_effort_match(name: str) -> Optional[Tuple[str, float]]:
 
 class ScreeningUnavailable(RuntimeError):
     """Sanctions screening cannot run. Raised instead of reporting 'no match'."""
+
+
+def _unavailable(exc: ImportError) -> ScreeningUnavailable:
+    return ScreeningUnavailable(
+        "Sanctions screening is unavailable: rapidfuzz is not installed. "
+        "Run `pip install -r requirements.txt`. The batch cannot be audited "
+        "without screening."
+    )
 
 
 def rule_screener(name: str) -> Optional[str]:
@@ -156,12 +212,20 @@ def rule_screener(name: str) -> Optional[str]:
     try:
         hit = screen(name)
     except ImportError as exc:
-        raise ScreeningUnavailable(
-            "Sanctions screening is unavailable: rapidfuzz is not installed. "
-            "Run `pip install -r requirements.txt`. The batch cannot be audited "
-            "without screening."
-        ) from exc
+        raise _unavailable(exc) from exc
     return hit.matched_name if hit else None
+
+
+def _rule_screen_many(names: Iterable[str]) -> Dict[str, Optional[str]]:
+    """Bulk form of rule_screener, used by utils.rules.apply_rules. Fails closed too."""
+    try:
+        hits = screen_many(names)
+    except ImportError as exc:
+        raise _unavailable(exc) from exc
+    return {name: (hit.matched_name if hit else None) for name, hit in hits.items()}
+
+
+rule_screener.screen_many = _rule_screen_many  # type: ignore[attr-defined]
 
 
 FREEZE_DIRECTIVE_TEMPLATE = """\

@@ -783,6 +783,71 @@ def test_normalize_name_handles_empty_input():
     assert normalize_name("") == "" and normalize_name(None) == ""
 
 
+def _labelled_ledger_with_watchlist_names():
+    """The generated ledger plus rows whose parties are near or on the watchlist,
+    so the comparison covers hits and near-misses, not only clean names."""
+    scripts_dir = Path(__file__).resolve().parent.parent / "scripts"
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    from generate_sample_ledger import generate
+
+    ledger = generate()[["transaction_id", "sender", "receiver", "amount", "country"]].copy()
+    ledger["amount"] = ledger["amount"].map(parse_money)
+    extra = [("Viktor Bout", "Acme Ltd"), ("Acme Ltd", "BOUT, Viktor"), ("V. Bout", "Putin V.V."),
+             ("Tornado Cash Ltd", "Lazarus Grp"), ("Kim Jong-Un", "Melli Bank"),
+             ("Wagner", "Sinaloa Cartell"), ("Unknown_Entity", "Internal_Wallet")]
+    rows = [{"transaction_id": f"W{i}", "sender": s, "receiver": r,
+             "amount": Decimal("100"), "country": "USA"} for i, (s, r) in enumerate(extra)]
+    return pd.concat([ledger, pd.DataFrame(rows)], ignore_index=True)
+
+
+@pytest.mark.parametrize("threshold", [None, 60, 0])
+def test_bulk_screening_matches_per_name_screening(threshold):
+    from utils.screening import screen, screen_many
+
+    ledger = _labelled_ledger_with_watchlist_names()
+    names = sorted(set(ledger["sender"]) | set(ledger["receiver"]))
+    bulk = screen_many(names, threshold=threshold)
+    for name in names:
+        one = screen(name, threshold=threshold)
+        assert (bulk[name] is None) == (one is None), name
+        if one is not None:
+            assert (bulk[name].matched_name, bulk[name].score) == (one.matched_name, one.score), name
+
+
+def test_bulk_rules_give_the_same_result_as_per_name_rules():
+    from utils.screening import rule_screener
+
+    ledger = _labelled_ledger_with_watchlist_names()
+    bulk = apply_rules(ledger, screener=rule_screener)
+    per_name = apply_rules(ledger, screener=lambda name: rule_screener(name))
+    assert bulk["rule_reasons"].tolist() == per_name["rule_reasons"].tolist()
+    assert bulk["sanctions_hits"].tolist() == per_name["sanctions_hits"].tolist()
+    assert bulk["rule_flag"].tolist() == per_name["rule_flag"].tolist()
+    assert sum(len(h) for h in bulk["sanctions_hits"]) > 0
+
+
+def test_apply_rules_screens_each_distinct_name_once():
+    class CountingScreener:
+        def __init__(self):
+            self.batches = []
+
+        def __call__(self, name):
+            raise AssertionError(f"screened {name!r} one row at a time")
+
+        def screen_many(self, names):
+            self.batches.append(sorted(names))
+            return {n: ("Viktor Bout" if n == "V. Bout" else None) for n in names}
+
+    rows = [{"transaction_id": f"T{i}", "amount": Decimal("100"), "country": "USA",
+             "sender": ["Acme", "Bravo", "V. Bout"][i % 3], "receiver": ["Corvus", "Acme"][i % 2]}
+            for i in range(300)]
+    screener = CountingScreener()
+    ruled = apply_rules(pd.DataFrame(rows), screener=screener)
+    assert screener.batches == [["Acme", "Bravo", "Corvus", "V. Bout"]]
+    assert sum(len(h) for h in ruled["sanctions_hits"]) == 100
+
+
 # --- audit trail -----------------------------------------------------------
 def test_audit_events_persist():
     db = Path(tempfile.mkdtemp()) / "audit.sqlite3"
