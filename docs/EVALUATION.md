@@ -18,6 +18,27 @@ python scripts/evaluate.py                 # prints both pipelines side by side
 
 Recall is the share of laundering rows forwarded for review instead of being dropped. It matters most here, because a dropped row is never looked at again.
 
+### Latest run: 2026-10-17
+
+The same steps CI runs, on Python 3.12.10 (the version CI uses) on Windows 11, in a venv installed from `requirements.lock.txt`:
+
+```
+$ python scripts/generate_sample_ledger.py
+Wrote 465 rows to data/sample_ledger.csv
+
+$ pytest tests/ -v
+============================ 102 passed in 40.20s =============================
+
+$ python scripts/evaluate.py --min-recall 1.0 --min-pattern-recall 1.0 --gate-exclude circular_camouflaged
+                 recall  precision      F1  forwarded
+original            7%        33%    0.11      9 (2%)
+current            84%        79%    0.82     48 (10%)
+```
+
+The evaluation exited with code 0. The 102 tests include the 8 app tests in `tests/test_app.py`; CI installs only `requirements-dev.txt`, so it skips those and runs the other 94. An earlier run on Python 3.14.4 gave the same numbers.
+
+The 7 false negatives are all `circular_camouflaged`; clean rows forwarded: 10 of 420.
+
 ## What catches each pattern
 
 | Pattern | Rows | Recall (current) | Recall (original) | Caught by |
