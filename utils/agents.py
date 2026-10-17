@@ -17,50 +17,18 @@ now come back through a constrained schema.
 from __future__ import annotations
 
 import logging
-import random
-import time
 from typing import Any, Optional
 
 from langchain_core.prompts import ChatPromptTemplate
 
 import config
 from utils.llm_provider import get_chat_model
+from utils.retry import call_with_retry
 from utils.sanitize import build_evidence_block, scrub
 from utils.schemas import TransactionAssessment
 from utils.verdicts import AuditOutcome, Verdict
 
 logger = logging.getLogger(__name__)
-
-# Substrings identifying failures that a retry cannot fix: bad credentials,
-# malformed requests, or a resource that does not exist. Matched against
-# "{exception type}: {message}" so it catches both botocore's ClientError,
-# which encodes the AWS error code in the message (e.g. "An error occurred
-# (ValidationException) when calling..."), and google-api-core's typed
-# exceptions, which encode it in the class name (PermissionDenied, NotFound,
-# ...). Anything not on this list is treated as transient and retried -
-# throttling, timeouts, and 5xx/ServiceUnavailable all fall through to that
-# default, which is deliberate: the list only needs to name the failures that
-# are certainly terminal, not enumerate every failure that might be transient.
-_TERMINAL_ERROR_MARKERS = (
-    "ValidationException",       # Bedrock: bad model id/params, never transient
-    "AccessDenied",              # Bedrock/AWS: missing IAM permission
-    "UnauthorizedException",
-    "UnrecognizedClientException",  # AWS: invalid access key
-    "ExpiredTokenException",
-    "InvalidSignatureException",
-    "NoCredentialsError",        # boto3: no credentials configured at all
-    "ResourceNotFoundException", # Bedrock: model/resource does not exist
-    "PermissionDenied",          # Vertex/google-api-core
-    "Unauthenticated",           # Vertex/google-api-core
-    "InvalidArgument",           # Vertex/google-api-core
-    "NotFound",                  # Vertex/google-api-core
-)
-
-
-def _is_terminal(exc: Exception) -> bool:
-    """True for failures a retry cannot fix, so the caller can fail fast."""
-    text = f"{type(exc).__name__}: {exc}"
-    return any(marker in text for marker in _TERMINAL_ERROR_MARKERS)
 
 
 _ANALYST_SYSTEM = (
@@ -97,35 +65,13 @@ class ComplianceAuditEngine:
     # --- retry -------------------------------------------------------------
     @staticmethod
     def _with_retry(fn, description: str):
-        """Exponential backoff with jitter, but only for transient failures.
-
-        A terminal failure (bad credentials, a malformed request, a model that
-        does not exist) raises immediately - retrying it three times with
-        growing delays just delays an error that will not change. LLM_MAX_RETRIES
-        is a retry count, not an attempt count: 0 still makes one attempt, it
-        just does not retry after it, so this always calls fn() at least once
-        and never raises None.
-        """
-        last: Optional[Exception] = None
-        attempts = max(config.LLM_MAX_RETRIES, 1)
-        for attempt in range(attempts):
-            try:
-                return fn()
-            except Exception as exc:  # noqa: BLE001 - provider raises many types
-                last = exc
-                if _is_terminal(exc):
-                    logger.error("%s failed with a terminal error: %s. Not retrying.",
-                                 description, exc)
-                    raise
-                if attempt == attempts - 1:
-                    break
-                delay = config.LLM_RETRY_BASE_DELAY * (2**attempt) + random.uniform(0, 0.4)
-                logger.warning(
-                    "%s failed (attempt %d/%d): %s. Retrying in %.1fs.",
-                    description, attempt + 1, attempts, exc, delay,
-                )
-                time.sleep(delay)
-        raise last  # type: ignore[misc]
+        """Call fn with the configured retry policy (see utils.retry)."""
+        return call_with_retry(
+            fn,
+            description,
+            max_retries=config.LLM_MAX_RETRIES,
+            base_delay=config.LLM_RETRY_BASE_DELAY,
+        )
 
     # --- public API --------------------------------------------------------
     def assess_transaction(

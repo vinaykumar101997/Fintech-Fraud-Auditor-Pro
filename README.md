@@ -68,7 +68,7 @@ graph TD
 
 - **Tier 1, rules** (`utils/rules.py`): reporting threshold, the structuring band just below it, high-risk jurisdictions, fuzzy sanctions-name matching and unidentified counterparties. A rule hit always forces a review.
 - **Tier 0, behaviour model** (`utils/funnel.py`, `utils/features.py`): twelve account-behaviour features scored against the batch's own median.
-- **Tier 2, AI review** (`utils/agents.py`): retrieval-grounded analysis with a structured verdict. Runs on Claude Haiku 4.5 (Amazon Bedrock) or Gemini 2.5 Flash (Google Vertex AI), switchable in config.
+- **Tier 2, AI review** (`utils/agents.py`): retrieval-grounded analysis with a structured verdict. Runs on Claude Haiku 4.5 (Amazon Bedrock) or Gemini 2.5 Flash (Google Vertex AI), switchable in config. Transient model errors such as throttling or timeouts are retried with exponential backoff, up to `LLM_MAX_RETRIES` times after the first attempt (default 3, so at most 4 calls); errors a retry can't fix, such as bad credentials or an unknown model, fail at once.
 - **Tier 3, network check** (`utils/graph_nodes.py`, `utils/graph_logic.py`): circular flows, account velocity and hidden beneficiaries, over the full ledger. A high score pauses for an officer.
 
 ## Design decisions
@@ -127,7 +127,7 @@ python scripts/ingest_pdf.py --file path/to/aml_guidelines.pdf
 `requirements-dev.txt` is enough for the tests and the evaluation; it skips the AI and UI libraries.
 
 ```bash
-pytest tests/ -v                          # 94 offline tests, plus 8 app tests with the full install
+pytest tests/ -v                          # 99 offline tests, plus 8 app tests with the full install
 python scripts/generate_sample_ledger.py  # fixed seed, so the numbers above reproduce exactly
 python scripts/evaluate.py                # recall and precision by laundering type
 python scripts/evaluate.py --min-recall 1.0 --min-pattern-recall 1.0 \

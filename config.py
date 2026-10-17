@@ -139,6 +139,9 @@ SCREENING_MATCH_THRESHOLD = int(os.getenv("SCREENING_MATCH_THRESHOLD", "88"))
 
 # --- Runtime ---
 LLM_MAX_WORKERS = int(os.getenv("LLM_MAX_WORKERS", "4"))
+# Retries after the first attempt for a transient model error (throttling,
+# timeout, 5xx), so a call makes up to 1 + LLM_MAX_RETRIES attempts. Terminal
+# errors (bad credentials, unknown model) are never retried.
 LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "3"))
 LLM_RETRY_BASE_DELAY = float(os.getenv("LLM_RETRY_BASE_DELAY", "1.5"))
 MAX_LEDGER_ROWS = int(os.getenv("MAX_LEDGER_ROWS", "50000"))

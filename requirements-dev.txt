@@ -1,8 +1,8 @@
 # Minimal install for the offline test/eval path: tests/test_pipeline.py and
 # scripts/evaluate.py touch only utils/rules.py, utils/funnel.py,
 # utils/features.py, utils/data_loader.py, utils/graph_nodes.py,
-# utils/screening.py, utils/sanitize.py, utils/verdicts.py, and
-# utils/audit_log.py - none of which import langchain/langgraph/boto3/streamlit.
+# utils/screening.py, utils/sanitize.py, utils/verdicts.py, utils/retry.py,
+# and utils/audit_log.py - none of which import langchain/langgraph/boto3/streamlit.
 # This lets CI run the pipeline regression suite without installing the
 # LLM/vector-store stack. rapidfuzz is required: sanctions screening fails
 # closed (raises) without it, so evaluate.py cannot run without it either.
