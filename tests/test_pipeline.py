@@ -28,6 +28,7 @@ from utils.graph_nodes import (  # noqa: E402
     synthesize_forensic_report,
 )
 from utils.rules import apply_rules, evaluate_row  # noqa: E402
+from utils.retry import call_with_retry  # noqa: E402
 from utils.sanitize import build_evidence_block, scrub  # noqa: E402
 from utils.screening import normalize_name  # noqa: E402
 from utils.verdicts import AuditOutcome, Verdict  # noqa: E402
@@ -238,6 +239,67 @@ def test_negated_text_does_not_produce_a_suspicious_verdict():
     assert Verdict.CLEAR is Verdict("CLEAR")
     # Verdicts come from the schema, not the prose. Prove the old heuristic was wrong:
     assert any(k in prose.lower() for k in ("suspicious", "laundering"))
+
+
+# --- model call retries ----------------------------------------------------
+class _Flaky:
+    """Fake model call: raises `error` for the first `failures` calls, then returns 'ok'."""
+
+    def __init__(self, failures, error=None):
+        self.failures = failures
+        self.error = error or TimeoutError("read timed out")
+        self.calls = 0
+
+    def __call__(self):
+        self.calls += 1
+        if self.calls <= self.failures:
+            raise self.error
+        return "ok"
+
+
+def _retry(fn, max_retries, sleeps):
+    return call_with_retry(fn, "test call", max_retries=max_retries,
+                           base_delay=0.0, sleep=sleeps.append)
+
+
+def test_two_retries_recover_from_two_transient_failures():
+    fn, sleeps = _Flaky(failures=2), []
+    assert _retry(fn, max_retries=2, sleeps=sleeps) == "ok"
+    assert fn.calls == 3
+    assert len(sleeps) == 2
+
+
+class NotFound(Exception):
+    """Same class name google-api-core uses for a missing model."""
+
+
+@pytest.mark.parametrize("error", [
+    RuntimeError("An error occurred (ResourceNotFoundException) when calling the "
+                 "InvokeModel operation: Could not resolve the foundation model"),
+    NotFound("404 Publisher model not found"),
+], ids=["bedrock-model-not-found", "vertex-not-found"])
+def test_terminal_error_is_not_retried(error):
+    fn, sleeps = _Flaky(failures=5, error=error), []
+    with pytest.raises(type(error)):
+        _retry(fn, max_retries=3, sleeps=sleeps)
+    assert fn.calls == 1
+    assert sleeps == []
+
+
+def test_zero_retries_makes_exactly_one_attempt():
+    fn, sleeps = _Flaky(failures=1), []
+    with pytest.raises(TimeoutError):
+        _retry(fn, max_retries=0, sleeps=sleeps)
+    assert fn.calls == 1
+    assert sleeps == []
+
+
+def test_exhausted_retries_raise_after_one_plus_max_retries_attempts():
+    fn, sleeps = _Flaky(failures=10), []
+    with pytest.raises(TimeoutError):
+        _retry(fn, max_retries=3, sleeps=sleeps)
+    assert fn.calls == 4
+    assert len(sleeps) == 3
 
 
 # --- topology scoring ------------------------------------------------------
