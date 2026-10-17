@@ -127,7 +127,7 @@ python scripts/ingest_pdf.py --file path/to/aml_guidelines.pdf
 `requirements-dev.txt` is enough for the tests and the evaluation; it skips the AI and UI libraries.
 
 ```bash
-pytest tests/ -v                          # 145 offline tests, plus 8 app tests with the full install
+pytest tests/ -v                          # 150 offline tests, plus 8 app tests with the full install
 python scripts/generate_sample_ledger.py  # fixed seed, so the numbers above reproduce exactly
 python scripts/evaluate.py                # recall and precision by laundering type
 python scripts/evaluate.py --min-recall 1.0 --min-pattern-recall 1.0 \

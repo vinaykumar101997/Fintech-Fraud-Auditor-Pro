@@ -121,3 +121,16 @@ Shape-only detection flagged every clean row, because businesses that trade in b
 - `circular_camouflaged` is 0/8: its legs are about two days apart with unrelated amounts, so under these rules it is not a fund-flow ring. Nothing was tuned to raise it.
 
 The 1-day window and 20% tolerance were chosen on this synthetic data and still need validating on the IBM AML dataset.
+
+## Sanctions screening speed
+
+Screening used to call `rapidfuzz.process.extractOne` once for every sender and receiver on every row, rebuilding the list of watchlist names each time. It now normalises the watchlist once and scores each distinct ledger name against all of it in one `rapidfuzz.process.cdist` call. Tests check that every name gets the same match and score as before, at the configured threshold and at 60 and 0, and that `apply_rules` gives identical reasons, flags and sanctions hits on the labelled ledger plus a few rows with watchlisted names.
+
+Measured on 2026-10-17 (Python 3.12.10, Windows 11), comparing the previous commit with the new code, three alternating rounds each. The watchlist has 31 names and aliases; the ledger has 36 distinct party names. The 19,995-row ledger is the labelled one repeated 43 times, so it has the same 36 names.
+
+| Ledger | Name lookups | Screening before | Screening after |
+|---|---|---|---|
+| labelled, 465 rows | 930 | 32.0 to 32.8 ms | 0.37 to 0.39 ms |
+| repeated, 19,995 rows | 39,990 | 1,287 to 1,450 ms | 3.8 to 4.0 ms |
+
+These times cover screening only. The whole of `apply_rules`, which also loops over rows in pandas, went from 71 to 76 ms to 15 to 37 ms on 465 rows, and from 2.9 to 3.0 s to 0.6 to 1.4 s on 19,995 rows; those totals varied a lot between runs on this machine. The gain grows with the number of rows per distinct name and with the size of the watchlist, but a full OFAC list has not been measured.

@@ -95,7 +95,20 @@ def evaluate_row(
 
 
 def apply_rules(df: pd.DataFrame, screener: Screener = _no_screening) -> pd.DataFrame:
-    """Add `rule_flag`, `rule_reasons` and `sanctions_hits` columns to the ledger."""
+    """Add `rule_flag`, `rule_reasons` and `sanctions_hits` columns to the ledger.
+
+    A screener that also has a `screen_many(names)` method is called once with
+    every distinct sender and receiver, instead of once per row.
+    """
+    screen_many = getattr(screener, "screen_many", None)
+    if screen_many is not None:
+        names = set()
+        for col in ("sender", "receiver"):
+            if col in df.columns:
+                names.update(str(value) for value in df[col])
+        found = screen_many(sorted(n for n in names if n))
+        screener = found.get
+
     flags, reasons, sanctions = [], [], []
     for _, row in df.iterrows():
         outcome = evaluate_row(
