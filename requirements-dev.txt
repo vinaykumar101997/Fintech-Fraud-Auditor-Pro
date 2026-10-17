@@ -2,7 +2,9 @@
 # scripts/evaluate.py touch only utils/rules.py, utils/funnel.py,
 # utils/features.py, utils/data_loader.py, utils/graph_nodes.py,
 # utils/screening.py, utils/sanitize.py, utils/verdicts.py, utils/retry.py,
-# and utils/audit_log.py - none of which import langchain/langgraph/boto3/streamlit.
+# utils/jurisdictions.py and utils/audit_log.py - none of which import
+# langchain/langgraph/boto3/streamlit. config.py imports utils/jurisdictions.py,
+# so pycountry is needed for anything that loads config.
 # This lets CI run the pipeline regression suite without installing the
 # LLM/vector-store stack. rapidfuzz is required: sanctions screening fails
 # closed (raises) without it, so evaluate.py cannot run without it either.
@@ -14,4 +16,5 @@ numpy==2.4.4
 scikit-learn==1.8.0
 networkx==3.7
 rapidfuzz==3.6.1
+pycountry==26.2.16
 pytest==8.3.4

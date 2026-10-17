@@ -17,6 +17,7 @@ from typing import Callable, List, Optional
 import pandas as pd
 
 import config
+from utils.jurisdictions import is_blank, resolve_country
 from utils.verdicts import RuleResult
 
 Screener = Callable[[str], Optional[str]]
@@ -33,11 +34,16 @@ def evaluate_row(
     receiver: str = "",
     screener: Screener = _no_screening,
 ) -> RuleResult:
-    """Apply every deterministic rule to a single transaction."""
+    """Apply every deterministic rule to a single transaction.
+
+    Notes (low severity) are reported alongside the reasons but do not flag
+    the row on their own.
+    """
     result = RuleResult()
     reasons: List[str] = []
+    notes: List[str] = []
     magnitude = abs(amount)
-    country_norm = (country or "").strip().lower()
+    country_code = resolve_country(country)
 
     if magnitude >= config.REPORTING_THRESHOLD:
         reasons.append(
@@ -51,11 +57,22 @@ def evaluate_row(
             f"({config.STRUCTURING_FLOOR:,.0f}-{config.REPORTING_THRESHOLD:,.0f}), just below the reporting threshold."
         )
 
-    if any(c in country_norm for c in config.HIGH_RISK_COUNTRIES if c):
-        reasons.append(f"Counterparty jurisdiction '{country}' is on the high-risk list.")
-
-    if any(c in country_norm for c in config.SECRECY_JURISDICTIONS if c):
-        reasons.append(f"Counterparty jurisdiction '{country}' is a recognised secrecy jurisdiction.")
+    if country_code is None:
+        if is_blank(country):
+            notes.append("Unresolved jurisdiction: no country given.")
+        else:
+            notes.append(
+                f"Unresolved jurisdiction: '{country}' is not a recognised country name or ISO code."
+            )
+    else:
+        if country_code in config.HIGH_RISK_COUNTRIES:
+            reasons.append(
+                f"Counterparty jurisdiction '{country}' ({country_code}) is on the high-risk list."
+            )
+        if country_code in config.SECRECY_JURISDICTIONS:
+            reasons.append(
+                f"Counterparty jurisdiction '{country}' ({country_code}) is a recognised secrecy jurisdiction."
+            )
 
     for label, name in (("Sender", sender), ("Receiver", receiver)):
         if not name:
@@ -73,7 +90,7 @@ def evaluate_row(
     if reasons:
         result.flagged = True
         result.force_review = True
-        result.reasons = reasons
+    result.reasons = reasons + notes
     return result
 
 

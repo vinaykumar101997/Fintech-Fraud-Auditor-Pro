@@ -32,6 +32,10 @@ from utils.screening import rule_screener  # noqa: E402
 
 LABELLED = config.DATA_DIR / "sample_ledger_labelled.csv"
 
+LEGACY_HIGH_RISK_NAMES = (
+    "russia", "north korea", "iran", "syria", "belarus", "myanmar", "afghanistan",
+)
+
 
 def metrics(truth: pd.Series, predicted: pd.Series) -> dict:
     tp = int((predicted & (truth == 1)).sum())
@@ -101,8 +105,10 @@ def legacy_pipeline(df: pd.DataFrame) -> pd.Series:
     from sklearn.ensemble import IsolationForest
 
     kept = IsolationForest(contamination=0.15, random_state=42).fit_predict(df[["amount_float"]]) == -1
+    # The original build's list and substring match, frozen here so the
+    # comparison does not move when the current rules change.
     high_risk = df["country"].str.lower().apply(
-        lambda c: any(h in c for h in config.HIGH_RISK_COUNTRIES)
+        lambda c: any(h in c for h in LEGACY_HIGH_RISK_NAMES)
     )
     tier1 = (df["amount_float"] >= float(config.REPORTING_THRESHOLD)) | high_risk
     return pd.Series(kept, index=df.index) & tier1
