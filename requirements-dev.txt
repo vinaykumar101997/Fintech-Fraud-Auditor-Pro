@@ -9,6 +9,10 @@
 # LLM/vector-store stack. rapidfuzz is required: sanctions screening fails
 # closed (raises) without it, so evaluate.py cannot run without it either.
 #
+# langchain-core and pydantic are here so tests/test_prompt_injection.py runs
+# in CI: it drives utils/agents.py with a fake model, so no provider SDK,
+# credentials or network are needed.
+#
 # Use requirements.txt (or requirements.lock.txt) instead when you need the
 # Streamlit app or the compliance tier.
 pandas==3.0.2
@@ -17,4 +21,6 @@ scikit-learn==1.8.0
 networkx==3.7
 rapidfuzz==3.6.1
 pycountry==26.2.16
+langchain-core==1.6.3
+pydantic==2.13.2
 pytest==8.3.4

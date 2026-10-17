@@ -15,8 +15,9 @@ jobs:
         with:
           python-version: "3.12"
 
-      # requirements-dev.txt only - the pipeline regression suite and the
-      # funnel evaluation need no LLM/vector-store stack and no network.
+      # requirements-dev.txt only - the regression suite, the prompt-injection
+      # tests (fake model, langchain-core only) and the funnel evaluation need
+      # no model provider, vector store or network.
       - run: pip install -r requirements-dev.txt
 
       - name: Generate the labelled sample ledger
