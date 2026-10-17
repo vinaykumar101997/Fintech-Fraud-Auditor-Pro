@@ -82,6 +82,9 @@ graph TD
 **The AI answers in a fixed format.** The model's verdict is one of a few set answers, not free text that has to be interpreted.
 *Technical:* structured output with SUSPICIOUS, CLEAR or ERROR. An ERROR is never treated as clear.
 
+**Ledger text is treated as hostile.** The party being audited controls the names and countries in the ledger, so anything in those fields may be an attempt to steer the AI model.
+*Technical:* the defences that hold are structured output and the SAR gate. The model can only answer with the fixed verdict schema; an answer outside it becomes ERROR, and extra fields are dropped. A SAR needs an officer approval recorded as a `human_review` event, which no model output or ledger field can write. Regex scrubbing and fencing of ledger fields are a secondary layer: the scrubber only recognises plain ASCII English markers, so homoglyphs, zero-width characters and instructions in other languages pass through it. `tests/test_prompt_injection.py` runs those cases against a model that obeys the injected text. The schema limits what the answer can be, not whether it is right: an obeyed instruction can still produce a CLEAR verdict.
+
 **Following the money around a circle.** A loop only counts if the money actually travels it: one transfer after another, within a short time, with similar amounts.
 *Technical:* time-ordered cycles of 2 to 6 accounts that include the audited transaction, within a configurable window (default 1 day) and amount tolerance (default 20%). On the sample data this cut false alarms on clean transactions from 420 of 420 to 25 of 420.
 
@@ -127,7 +130,7 @@ python scripts/ingest_pdf.py --file path/to/aml_guidelines.pdf
 `requirements-dev.txt` is enough for the tests and the evaluation; it skips the AI and UI libraries.
 
 ```bash
-pytest tests/ -v                          # 150 offline tests, plus 8 app tests with the full install
+pytest tests/ -v                          # 160 offline tests; the full install adds 8 app and 76 prompt-injection tests
 python scripts/generate_sample_ledger.py  # fixed seed, so the numbers above reproduce exactly
 python scripts/evaluate.py                # recall and precision by laundering type
 python scripts/evaluate.py --min-recall 1.0 --min-pattern-recall 1.0 \

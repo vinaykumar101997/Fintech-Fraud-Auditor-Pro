@@ -15,6 +15,11 @@ Two defences, layered:
 The structural defence matters more than either: the verdict comes back through
 a constrained schema, so an injected instruction has no free-text channel to
 express itself through.
+
+The patterns below only match plain ASCII English. Homoglyphs, zero-width
+characters and instructions in other languages pass through unchanged, and a
+field can contain the closing </transaction_record> tag. Treat this module as
+a secondary layer; tests/test_prompt_injection.py checks the controls that hold.
 """
 
 from __future__ import annotations
