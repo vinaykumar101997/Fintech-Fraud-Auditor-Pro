@@ -1009,6 +1009,42 @@ def test_officer_review_refuses_invalid_requests_without_recording(tmp_path, ove
     assert audit_log.history("T1", db) == []
 
 
+INVISIBLE_NAMES = {
+    "zero-width-space": "​",
+    "joiners": "​‌‍",
+    "word-joiner": "⁠",
+    "bom-with-spaces": " ﻿ ",
+    "mixed-with-spaces": "​ ​ ",
+}
+
+
+@pytest.mark.parametrize("officer", INVISIBLE_NAMES.values(), ids=INVISIBLE_NAMES.keys())
+def test_officer_review_refuses_a_name_of_only_invisible_characters(tmp_path, officer):
+    from utils.sar_gate import OfficerReviewRefused
+
+    db = tmp_path / "audit.sqlite3"
+    audit_log.initialize(db)
+    with pytest.raises(OfficerReviewRefused):
+        _officer_review(db, officer=officer)
+    assert audit_log.history("T1", db) == []
+
+
+@pytest.mark.parametrize("actor", INVISIBLE_NAMES.values(), ids=INVISIBLE_NAMES.keys())
+def test_sar_gate_refuses_an_approval_by_an_invisible_officer_name(actor):
+    from utils.sar_gate import sar_approval
+
+    assert not sar_approval([_review("T1", "APPROVE", actor=actor)], "T1", batch_id="b1").allowed
+
+
+def test_officer_name_with_a_stray_zero_width_character_is_still_accepted(tmp_path):
+    from utils.sar_gate import sar_approval
+
+    db = tmp_path / "audit.sqlite3"
+    audit_log.initialize(db)
+    _officer_review(db, officer="officer​.k")
+    assert sar_approval(audit_log.history("T1", db), "T1", batch_id="b1").allowed
+
+
 def test_officer_review_is_not_applied_if_it_cannot_be_recorded(tmp_path):
     with pytest.raises(audit_log.AuditWriteError):
         _officer_review(_unwritable_db(tmp_path, "parent-is-a-file"))

@@ -38,6 +38,7 @@ from utils.rules import apply_rules, sanctions_hit_events  # noqa: E402
 from utils.sar_gate import (  # noqa: E402
     OFFICER_DECISIONS,
     OfficerReviewRefused,
+    is_blank_officer,
     record_officer_review,
     sar_approval,
 )
@@ -429,7 +430,7 @@ def render_topology(df: pd.DataFrame, batch_id: str):
             approve, reject = st.columns(2)
 
             def resolve(decision: str):
-                if not approver.strip():
+                if is_blank_officer(approver):
                     st.warning("Enter the reviewing officer's name before deciding.")
                     return
                 decided_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
