@@ -118,59 +118,123 @@ def pass_through_features(df: pd.DataFrame) -> pd.DataFrame:
     to established accounts as much as new ones. Without timestamps every row
     gets hop_depth 1 and zeros.
     """
+    n = len(df)
     out = pd.DataFrame(
         {"hop_depth": 1.0, "has_pass_through": 0.0, "dwell_hours": 0.0, "pass_through_ratio": 0.0},
         index=df.index,
     )
-    if "timestamp" not in df.columns:
+    if "timestamp" not in df.columns or n == 0:
         return out
     ts = pd.to_datetime(df["timestamp"], errors="coerce")
     if ts.isna().all():
         return out
 
-    amount = df["amount_float"].astype(float)
-    sender = df["sender"].astype(str)
-    receiver = df["receiver"].astype(str)
-    window = pd.Timedelta(hours=config.PASS_THROUGH_WINDOW_HOURS)
+    pred = _pass_through_predecessors(df, ts)
+    succ = _first_successors(pred, ts)
+
+    depth = 1 + _chain_length(pred) + _chain_length(succ)
+    out["hop_depth"] = depth.astype(float)
+    linked = pred >= 0
+    if linked.any():
+        rows, sources = np.flatnonzero(linked), pred[linked]
+        ts_ns = ts.to_numpy("datetime64[ns]")
+        amount = df["amount_float"].astype(float).to_numpy()
+        out.iloc[rows, out.columns.get_loc("has_pass_through")] = 1.0
+        out.iloc[rows, out.columns.get_loc("dwell_hours")] = (
+            (ts_ns[rows] - ts_ns[sources]) / np.timedelta64(1, "s") / 3600.0
+        )
+        out.iloc[rows, out.columns.get_loc("pass_through_ratio")] = amount[rows] / amount[sources]
+    return out
+
+
+def _pass_through_predecessors(df: pd.DataFrame, ts: pd.Series) -> np.ndarray:
+    """Position of each payment's predecessor, or -1.
+
+    Candidates for payment i are payments j received by i's sender with
+    ts[i] - window <= ts[j] < ts[i]. Each sender's received payments are
+    sorted by time, so the window is found by binary search rather than by
+    scanning every payment the sender ever received. Of the candidates whose
+    amount qualifies, the latest wins; ties go to the earlier row.
+    """
+    n = len(df)
+    amount = df["amount_float"].astype(float).to_numpy()
+    valid = ~ts.isna().to_numpy()
+    ts_ns = ts.to_numpy("datetime64[ns]").astype("int64")
+    window_ns = int(pd.Timedelta(hours=config.PASS_THROUGH_WINDOW_HOURS).value)
     low = 1.0 - config.PASS_THROUGH_TOLERANCE
 
-    received = {}
-    for i in df.index:
-        received.setdefault(receiver[i], []).append(i)
+    accounts = pd.Index(pd.unique(np.concatenate([
+        df["sender"].astype(str).to_numpy(), df["receiver"].astype(str).to_numpy()])))
+    sender = accounts.get_indexer(df["sender"].astype(str))
+    receiver = accounts.get_indexer(df["receiver"].astype(str))
 
-    pred = {}
-    for i in df.index:
-        best = None
-        if not pd.isna(ts[i]):
-            for j in received.get(sender[i], []):
-                if j == i or pd.isna(ts[j]) or amount[j] <= 0:
-                    continue
-                if ts[i] - window <= ts[j] < ts[i] and low <= amount[i] / amount[j] <= 1.0:
-                    if best is None or ts[j] > ts[best]:
-                        best = j
-        pred[i] = best
+    # Received payments that can be a predecessor, sorted by (account, time).
+    inbound = np.flatnonzero(valid & (amount > 0))
+    pred = np.full(n, -1, dtype=np.int64)
+    if inbound.size == 0:
+        return pred
 
-    succ = {}
-    for i, j in pred.items():
-        if j is not None and (j not in succ or ts[i] < ts[succ[j]]):
-            succ[j] = i
+    # Rank every time value used in a comparison so (account, time) packs into
+    # one exact int64 key, whatever the time range.
+    queries = np.flatnonzero(valid)
+    times = np.concatenate([ts_ns[inbound], ts_ns[queries] - window_ns, ts_ns[queries]])
+    _, rank = np.unique(times, return_inverse=True)
+    scale = np.int64(len(times) + 1)
+    in_rank, lo_rank, hi_rank = np.split(rank.astype(np.int64), [inbound.size, inbound.size + queries.size])
 
-    def length(start, links):
-        steps, node, seen = 0, links.get(start), {start}
-        while node is not None and node not in seen:
-            seen.add(node)
-            steps += 1
-            node = links.get(node)
-        return steps
+    in_key = receiver[inbound].astype(np.int64) * scale + in_rank
+    order = np.argsort(in_key, kind="stable")
+    in_key, inbound = in_key[order], inbound[order]
 
-    for i in df.index:
-        out.at[i, "hop_depth"] = float(1 + length(i, pred) + length(i, succ))
-        j = pred[i]
-        if j is not None:
-            out.at[i, "has_pass_through"] = 1.0
-            out.at[i, "dwell_hours"] = (ts[i] - ts[j]).total_seconds() / 3600.0
-            out.at[i, "pass_through_ratio"] = amount[i] / amount[j]
-    return out
+    q_account = sender[queries].astype(np.int64) * scale
+    start = np.searchsorted(in_key, q_account + lo_rank, side="left")
+    stop = np.searchsorted(in_key, q_account + hi_rank, side="left")
+    counts = stop - start
+    if counts.sum() == 0:
+        return pred
+
+    # One row per (payment, candidate) pair inside the window.
+    i = np.repeat(queries, counts)
+    offsets = np.arange(counts.sum()) - np.repeat(np.cumsum(counts) - counts, counts)
+    j = inbound[np.repeat(start, counts) + offsets]
+
+    keep = j != i
+    i, j = i[keep], j[keep]
+    ratio = amount[i] / amount[j]
+    keep = (low <= ratio) & (ratio <= 1.0)
+    i, j = i[keep], j[keep]
+    if i.size == 0:
+        return pred
+
+    pairs = pd.DataFrame({"i": i, "j": j, "ts": ts_ns[j]})
+    best = pairs.sort_values(["i", "ts", "j"], ascending=[True, False, True], kind="stable")
+    best = best.drop_duplicates("i", keep="first")
+    pred[best["i"].to_numpy()] = best["j"].to_numpy()
+    return pred
+
+
+def _first_successors(pred: np.ndarray, ts: pd.Series) -> np.ndarray:
+    """For each payment, the earliest payment that passes it on, or -1. Ties go to the earlier row."""
+    succ = np.full(len(pred), -1, dtype=np.int64)
+    rows = np.flatnonzero(pred >= 0)
+    if rows.size == 0:
+        return succ
+    links = pd.DataFrame({"j": pred[rows], "i": rows,
+                          "ts": ts.to_numpy("datetime64[ns]").astype("int64")[rows]})
+    first = links.sort_values(["j", "ts", "i"], kind="stable").drop_duplicates("j", keep="first")
+    succ[first["j"].to_numpy()] = first["i"].to_numpy()
+    return succ
+
+
+def _chain_length(links: np.ndarray) -> np.ndarray:
+    """Steps from each row along `links` until -1. Links always move strictly in time, so they never loop."""
+    length = np.zeros(len(links), dtype=np.int64)
+    current = links.copy()
+    while (current >= 0).any():
+        step = current >= 0
+        length += step
+        current = np.where(step, links[np.where(step, current, 0)], -1)
+    return length
 
 
 def _burst_score(df: pd.DataFrame, sender: pd.Series) -> pd.Series:
