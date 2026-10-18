@@ -49,6 +49,60 @@ What this shows and what it doesn't:
 - **Pooled recall is higher than seed 7's** only because the held-out ledgers happen to contain fewer `circular_camouflaged` rows relative to the patterns that are always caught.
 - **"Held out" means new random draws, not new behaviour.** The same author wrote the generator, the patterns and the detector, so these seeds test whether the numbers survive different random data, not whether the detector finds laundering it wasn't designed for.
 
+### Harder patterns
+
+`generate(seed, hard=True)` appends five patterns written to get past the tells the default ledger relies on. They come from a separate random generator and are added after the default rows, so the default ledger (and every number above) is unchanged; a test pins its SHA-256 for seeds 7 and 11.
+
+| Pattern | Laundering? | Rows per seed | What it tests |
+|---|---|---|---|
+| `established_pass_through` | yes | 9 | Money passed along chains of businesses that each have 20+ earlier clean transactions, so account newness gives nothing away |
+| `sanctioned_name_variant` | yes | 10 | Watchlist names with changed casing, punctuation, Ltd/Limited, token order, or a one-character typo (2 of each) |
+| `sanctioned_country_variant` | yes | 10 | Low-value transfers to high-risk countries written as `RU`, `ru`, `Russian Federation`, `russia`, `KP`, `DPRK`, `Korea, North`, `IR`, `Iran, Islamic Republic of`, `sy` |
+| `near_miss_clean` | no | 10 | Clean parties whose names resemble watchlist entries (`Victor Boutros`, `Melli Bakery`, `Cash Tornado Car Wash`, ...) |
+| `clean_country_variant` | no | 10 | Clean traffic with countries written as `GB`, `UK`, `united kingdom`, `Great Britain`, `DE`, `germany`, `US`, `usa`, `FR`, `Deutschland` |
+
+```bash
+python scripts/evaluate.py --seeds 7 11 13 17 19 23 --hard
+```
+
+Measured on 2026-10-18, nothing in the pipeline changed. This is the baseline for any later change.
+
+| Seed | Role | Rows | Laundering | TP | FP | FN | Recall | Precision | F1 | Forwarded |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 7 | development | 514 | 74 | 45 | 11 | 29 | 61% | 80% | 0.69 | 56 |
+| 11 | held out | 519 | 79 | 38 | 11 | 41 | 48% | 78% | 0.59 | 49 |
+| 13 | held out | 515 | 75 | 43 | 11 | 32 | 57% | 80% | 0.67 | 54 |
+| 17 | held out | 515 | 75 | 53 | 20 | 22 | 71% | 73% | 0.72 | 73 |
+| 19 | held out | 514 | 74 | 52 | 24 | 22 | 70% | 68% | 0.69 | 76 |
+| 23 | held out | 512 | 72 | 49 | 26 | 23 | 68% | 65% | 0.67 | 75 |
+| **Pooled held out** | | 2,575 | 375 | 235 | 92 | 140 | **62.7%** (95% CI 57.7% to 67.4%) | **71.9%** (95% CI 66.8% to 76.5%) | 0.67 | 327 |
+
+Pooled over the held-out seeds, with the rows on which the sanctions-name rule and a country rule fired:
+
+| Pattern | Caught | Name rule fired | Country rule fired |
+|---|---|---|---|
+| structuring | 50/50 | 0 | 24 |
+| sanctioned | 30/30 | 0 | 30 |
+| circular | 15/15 | 0 | 13 |
+| circular_small | 28/46 | 0 | 0 |
+| fan_in | 13/55 | 0 | 0 |
+| circular_camouflaged | 0/34 | 0 | 0 |
+| established_pass_through | 0/45 | 0 | 0 |
+| sanctioned_name_variant | 49/50 | 45 | 0 |
+| sanctioned_country_variant | 50/50 | 0 | 50 |
+| near_miss_clean (false positives) | 39/50 forwarded | 0 | 0 |
+| clean_country_variant (false positives) | 11/50 forwarded | 0 | 0 |
+| clean (false positives) | 42/2,100 forwarded | 0 | 0 |
+
+What the harder patterns show:
+
+- **Laundering through established accounts is not caught at all** (0/45 held out, 0/9 on seed 7). Nothing in Tier 0 or Tier 1 looks at a chain of ordinary businesses passing money on.
+- **Adding the new rows broke detection of `fan_in` and `circular_small`.** `fan_in` falls from 55/55 to 13/55 held out (11/11 to 0/11 on seed 7) and `circular_small` from 46/46 to 28/46. The behaviour model flags about the same number of rows either way (44 vs 45 on seed 7), but the new patterns bring many one-off accounts: on seed 7, accounts seen once rise from 11 of 36 to 31 of 57. Those two patterns were caught because their accounts were new and new accounts were rare. Once one-off counterparties are common, as they are in real ledgers, that signal fades.
+- **Country resolution works on every format here.** The country rule fires on 50/50 country variants held out and on 0/50 clean variants. `Deutschland` is not resolved; it gets an unresolved-jurisdiction note and no flag.
+- **The name rule catches 45 of 50 variants and none of the near misses.** Casing, punctuation, suffix and reordering all score 100. The typo `Viktor Bouf` scores 90.9 and is caught; `Lazarus Groop` scores 70 and is missed, because "group" is stripped as a company suffix while the misspelt "groop" is kept. No near-miss name reaches the threshold of 88, but the margin is small: `Melli Bakery` scores 81.8 and `Victor Boutros` 80.0.
+- **Near-miss names still cost precision**, through the behaviour model rather than the name rule: 39 of 50 are forwarded, because they are one-off accounts.
+- **Results swing a lot between seeds** (recall 48% to 71%), so a single seed says little.
+
 ### Latest run: 2026-10-17
 
 The same steps CI runs, on Python 3.12.10 (the version CI uses) on Windows 11, in a venv installed from `requirements.lock.txt`, after ISO country matching, the retry-count fix and the watchlist cleanup:

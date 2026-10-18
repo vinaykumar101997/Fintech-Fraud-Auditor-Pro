@@ -130,10 +130,11 @@ python scripts/ingest_pdf.py --file path/to/aml_guidelines.pdf
 `requirements-dev.txt` is enough for the tests and the evaluation; it includes `langchain-core` and `pydantic` for the prompt-injection tests but skips the model providers and the UI libraries.
 
 ```bash
-pytest tests/ -v                          # 270 offline tests; the full install adds 9 app tests
+pytest tests/ -v                          # 278 offline tests; the full install adds 9 app tests
 python scripts/generate_sample_ledger.py  # fixed seed, so the numbers above reproduce exactly
 python scripts/evaluate.py                # recall and precision by laundering type
 python scripts/evaluate.py --seeds 7 11 13 17 19 23   # development seed plus held-out seeds
+python scripts/evaluate.py --seeds 7 11 13 17 19 23 --hard   # with the harder patterns
 python scripts/evaluate.py --min-recall 1.0 --min-pattern-recall 1.0 \
     --gate-exclude circular_camouflaged   # what CI runs
 ```

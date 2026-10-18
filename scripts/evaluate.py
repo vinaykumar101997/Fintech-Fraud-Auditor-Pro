@@ -137,24 +137,32 @@ def wilson_interval(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
     return max(0.0, centre - half), min(1.0, centre + half)
 
 
-def evaluate_seed(seed: int) -> dict:
+def _country_rule_fired(reasons) -> bool:
+    return any("high-risk list" in r or "secrecy jurisdiction" in r for r in reasons or [])
+
+
+def evaluate_seed(seed: int, hard: bool = False) -> dict:
     """Generate the labelled ledger for `seed` and score Tiers 0+1 on it.
 
     Goes through the same CSV round trip and loader as the file-based run, so
-    seed 7 reproduces the numbers of `python scripts/evaluate.py`.
+    seed 7 reproduces the numbers of `python scripts/evaluate.py`. With
+    hard=True the ledger also carries the harder patterns.
     """
     from generate_sample_ledger import generate
 
-    text = generate(seed=seed).to_csv(index=False)
+    text = generate(seed=seed, hard=hard).to_csv(index=False)
     labels = pd.read_csv(io.StringIO(text))
     ledger, _ = load_ledger(io.StringIO(text))
     ledger = ledger.drop(columns=["is_laundering", "pattern"], errors="ignore").merge(
         labels[["transaction_id", "is_laundering", "pattern"]], on="transaction_id", how="left"
     )
     truth = ledger["is_laundering"].fillna(0).astype(int)
-    result = run_funnel(apply_rules(ledger, screener=rule_screener))
+    ruled = apply_rules(ledger, screener=rule_screener)
+    result = run_funnel(ruled)
     predicted = ledger["transaction_id"].isin(set(result.flagged["transaction_id"]))
     m = metrics(truth, predicted)
+    name_fired = ruled["sanctions_hits"].map(bool)
+    country_fired = ruled["rule_reasons"].map(_country_rule_fired)
     return {
         "seed": seed,
         "rows": len(ledger),
@@ -165,19 +173,29 @@ def evaluate_seed(seed: int) -> dict:
             pattern: (len(group), int(predicted[group.index].sum()))
             for pattern, group in ledger.groupby("pattern")
         },
+        # (rows where the sanctions-name rule fired, rows where a country rule fired)
+        "rule_hits": {
+            pattern: (int(name_fired[group.index].sum()), int(country_fired[group.index].sum()))
+            for pattern, group in ledger.groupby("pattern")
+        },
     }
+
+
+def _sum_pairs(runs: list[dict], key: str) -> dict[str, tuple[int, int]]:
+    out: dict[str, tuple[int, int]] = {}
+    for run in runs:
+        for pattern, (a, b) in run.get(key, {}).items():
+            x, y = out.get(pattern, (0, 0))
+            out[pattern] = (x + a, y + b)
+    return out
 
 
 def pool(runs: list[dict]) -> dict:
     """Sum the counts of several seed runs."""
     pooled = {key: sum(r[key] for r in runs)
               for key in ("rows", "laundering", "tp", "fp", "fn", "tn", "forwarded")}
-    per_pattern: dict[str, tuple[int, int]] = {}
-    for run in runs:
-        for pattern, (total, caught) in run["per_pattern"].items():
-            t, c = per_pattern.get(pattern, (0, 0))
-            per_pattern[pattern] = (t + total, c + caught)
-    pooled["per_pattern"] = per_pattern
+    pooled["per_pattern"] = _sum_pairs(runs, "per_pattern")
+    pooled["rule_hits"] = _sum_pairs(runs, "rule_hits")
     return pooled
 
 
@@ -188,11 +206,12 @@ def _rates(r: dict) -> tuple[float, float, float]:
     return recall, precision, f1
 
 
-def report_seeds(seeds: list[int]) -> int:
-    runs = [evaluate_seed(s) for s in seeds]
+def report_seeds(seeds: list[int], hard: bool = False) -> int:
+    runs = [evaluate_seed(s, hard=hard) for s in seeds]
 
     print("\n" + "=" * 78)
-    print(f"FUNNEL EVALUATION BY SEED  (development seed {DEV_SEED}; others held out)")
+    print(f"FUNNEL EVALUATION BY SEED  (development seed {DEV_SEED}; others held out"
+          + ("; harder patterns included)" if hard else ")"))
     print("=" * 78)
     print(f"\n{'seed':<6}{'role':<10}{'rows':>6}{'laund.':>8}{'TP':>5}{'FP':>5}{'FN':>5}"
           f"{'recall':>9}{'precision':>11}{'F1':>7}{'forwarded':>11}")
@@ -213,6 +232,16 @@ def report_seeds(seeds: list[int]) -> int:
         print(f"{pattern:<22}" + "".join(f"{c:>9}" for c in cells))
 
     held_out = [r for r in runs if r["seed"] != DEV_SEED]
+    groups = [(f"seed {r['seed']}", r) for r in runs if r["seed"] == DEV_SEED]
+    if held_out:
+        groups.append(("pooled held-out", pool(held_out)))
+    for label, r in groups:
+        print(f"\nrule hits by pattern, {label}: rows / name rule / country rule")
+        for pattern in patterns:
+            total, _ = r["per_pattern"].get(pattern, (0, 0))
+            name, country = r["rule_hits"].get(pattern, (0, 0))
+            print(f"  {pattern:<28}{total:>6}{name:>6}{country:>6}")
+
     if held_out:
         p = pool(held_out)
         recall, precision, f1 = _rates(p)
@@ -255,13 +284,21 @@ def main(argv: list[str] | None = None) -> int:
         help=f"generate and score one ledger per seed (development seed {DEV_SEED}, "
              f"held out: {' '.join(map(str, HELD_OUT_SEEDS))}); prints results, no gate",
     )
+    parser.add_argument(
+        "--hard", action="store_true",
+        help="with --seeds: add the harder patterns (established accounts, name and "
+             "country variants, near-miss clean names) to each generated ledger",
+    )
     args = parser.parse_args(argv)
+
+    if args.hard and not args.seeds:
+        parser.error("--hard needs --seeds")
 
     if args.seeds:
         if args.with_llm or args.min_recall is not None or args.min_pattern_recall is not None \
                 or args.gate_exclude:
             parser.error("--seeds prints results only; it cannot be combined with --with-llm or the gate options")
-        return report_seeds(args.seeds)
+        return report_seeds(args.seeds, hard=args.hard)
 
     if not args.ledger.exists():
         print(f"No labelled ledger at {args.ledger}.")
