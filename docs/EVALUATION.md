@@ -158,7 +158,16 @@ What changed, pooled held out:
 - **Hard ledgers:** `established_pass_through` 0/45 to **42/45**; `fan_in` 13/55 to 33/55; `circular_small` 28/46 to 37/46; `sanctioned_name_variant` 49/50 to 50/50. False positives rose from 92 to 104 (near-miss names 39 to 44, clean-country variants 11 to 15, clean 42 to 45).
 - **Default ledgers:** `circular_small` 46/46 to 45/46 and `circular_camouflaged` 2/34 to 1/34; clean rows forwarded 64 to 69.
 - **Seed 7, which CI gates:** recall unchanged (38/45, every gated pattern still 100%), precision 79% to 75% (clean rows forwarded 10 to 13).
-- **Cost:** Tier 0+1 time on the 465-row seed-7 ledger went from about 550 ms to about 1,320 ms, from the pass-through matching loop.
+- **Cost:** the first version matched payments in a Python loop over every payment each sender had received, so its time grew with the square of the ledger size: about 1 s on 465 rows and 110 s on 5,115. It was rewritten with sorting and binary search over each sender's 3-hour window; tests check that its output equals the loop version exactly on the seed 7 and held-out default and hard ledgers. Measured on 2026-10-18 on the seed-7 ledger repeated with unique ids and shifted dates:
+
+  | Rows | Pass-through features, loop | Pass-through features, vectorised | Whole Tier 0+1, vectorised |
+  |---|---|---|---|
+  | 465 | 0.93 s | under 0.01 s | 0.3 to 0.5 s |
+  | 5,115 | 110 s | 0.01 to 0.02 s | 0.5 to 1.0 s |
+  | 19,995 | over 40 minutes (stopped) | 0.02 s | 1.0 s |
+  | 49,755 | not run (about 3 hours projected) | 0.11 s | 4.7 s |
+
+  CI's seed-7 run now reports Tier 0+1 at about 210 ms.
 - **`fan_in` gains are a side effect.** No pass-through feature describes fan-in; adding features changes how Isolation Forest splits the batch, and the fan-in rows happened to stand out more.
 
 **Point in time.** These are batch features: counts, volumes, fan-in and the pass-through chain all use every row in the ledger, including rows dated after the payment being scored (`hop_depth` follows money forward as well as back). That is fine for auditing a closed ledger. Scoring payments as they arrive would need each feature computed only from earlier rows, and the numbers above would not carry over.

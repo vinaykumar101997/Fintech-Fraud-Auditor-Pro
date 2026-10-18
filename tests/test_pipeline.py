@@ -377,6 +377,99 @@ def test_pass_through_features_without_timestamps_are_neutral():
     assert out["hop_depth"].tolist() == [1.0, 1.0]
 
 
+def _pass_through_reference(df):
+    """The original row-by-row implementation, kept to check the vectorised one."""
+    out = pd.DataFrame(
+        {"hop_depth": 1.0, "has_pass_through": 0.0, "dwell_hours": 0.0, "pass_through_ratio": 0.0},
+        index=df.index,
+    )
+    if "timestamp" not in df.columns:
+        return out
+    ts = pd.to_datetime(df["timestamp"], errors="coerce")
+    if ts.isna().all():
+        return out
+    amount = df["amount_float"].astype(float)
+    sender = df["sender"].astype(str)
+    receiver = df["receiver"].astype(str)
+    window = pd.Timedelta(hours=config.PASS_THROUGH_WINDOW_HOURS)
+    low = 1.0 - config.PASS_THROUGH_TOLERANCE
+    received = {}
+    for i in df.index:
+        received.setdefault(receiver[i], []).append(i)
+    pred = {}
+    for i in df.index:
+        best = None
+        if not pd.isna(ts[i]):
+            for j in received.get(sender[i], []):
+                if j == i or pd.isna(ts[j]) or amount[j] <= 0:
+                    continue
+                if ts[i] - window <= ts[j] < ts[i] and low <= amount[i] / amount[j] <= 1.0:
+                    if best is None or ts[j] > ts[best]:
+                        best = j
+        pred[i] = best
+    succ = {}
+    for i, j in pred.items():
+        if j is not None and (j not in succ or ts[i] < ts[succ[j]]):
+            succ[j] = i
+
+    def length(start, links):
+        steps, node, seen = 0, links.get(start), {start}
+        while node is not None and node not in seen:
+            seen.add(node)
+            steps += 1
+            node = links.get(node)
+        return steps
+
+    for i in df.index:
+        out.at[i, "hop_depth"] = float(1 + length(i, pred) + length(i, succ))
+        j = pred[i]
+        if j is not None:
+            out.at[i, "has_pass_through"] = 1.0
+            out.at[i, "dwell_hours"] = (ts[i] - ts[j]).total_seconds() / 3600.0
+            out.at[i, "pass_through_ratio"] = amount[i] / amount[j]
+    return out
+
+
+def _loaded_ledger(frame):
+    ledger, _ = load_ledger(io.StringIO(frame.drop(columns=["is_laundering", "pattern"]).to_csv(index=False)))
+    return ledger
+
+
+@pytest.mark.parametrize("hard", [False, True], ids=["default", "hard"])
+@pytest.mark.parametrize("seed", [7, 11, 13, 17, 19, 23])
+def test_pass_through_features_match_the_reference_on_generated_ledgers(seed, hard):
+    from utils.features import pass_through_features
+
+    ledger = _loaded_ledger(_generator()(seed=seed, hard=hard))
+    pd.testing.assert_frame_equal(pass_through_features(ledger), _pass_through_reference(ledger),
+                                  check_exact=True)
+
+
+def test_pass_through_features_match_the_reference_when_timestamps_and_amounts_tie():
+    from utils.features import pass_through_features
+
+    base = _generator()(seed=7)
+    copies = [base.assign(transaction_id=base["transaction_id"] + f"-c{k}") for k in range(3)]
+    ledger = _loaded_ledger(pd.concat(copies, ignore_index=True))
+    pd.testing.assert_frame_equal(pass_through_features(ledger), _pass_through_reference(ledger),
+                                  check_exact=True)
+
+
+def test_pass_through_features_scale_to_thousands_of_rows():
+    import time
+    from utils.features import pass_through_features
+
+    base = _generator()(seed=7)
+    stamp = pd.to_datetime(base["timestamp"])
+    copies = [base.assign(transaction_id=base["transaction_id"] + f"-r{k}",
+                          timestamp=(stamp + pd.Timedelta(days=40 * k)).dt.strftime("%Y-%m-%d %H:%M:%S"))
+              for k in range(11)]
+    ledger = _loaded_ledger(pd.concat(copies, ignore_index=True))
+    started = time.perf_counter()
+    pass_through_features(ledger)
+    assert time.perf_counter() - started < 5.0, f"{len(ledger)} rows"
+
+
 def test_behaviour_features_include_pass_through_and_ignore_labels():
     from utils.features import FEATURE_COLUMNS, build_features
 
