@@ -918,6 +918,81 @@ def test_apply_rules_screens_each_distinct_name_once():
     assert sum(len(h) for h in ruled["sanctions_hits"]) == 100
 
 
+# --- harder synthetic patterns ---------------------------------------------
+def _generator():
+    scripts_dir = Path(__file__).resolve().parent.parent / "scripts"
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    from generate_sample_ledger import generate
+    return generate
+
+
+@pytest.mark.parametrize("seed,digest", [
+    (7, "5e63b4638299250cf66e7824523860fda8ddc7562716ea4bfb3e906daba5dcc0"),
+    (11, "fc8886365b1563b1bca88618956be53ca891613b99dfbe97a52bd3d75727d8ff"),
+])
+def test_default_ledger_is_unchanged(seed, digest):
+    import hashlib
+
+    text = _generator()(seed=seed).to_csv(index=False)
+    assert hashlib.sha256(text.encode()).hexdigest() == digest
+
+
+def test_hard_ledger_starts_with_the_default_rows():
+    generate = _generator()
+    default, hard = generate(seed=7), generate(seed=7, hard=True)
+    pd.testing.assert_frame_equal(hard.iloc[:len(default)].reset_index(drop=True), default)
+    assert len(hard) > len(default)
+
+
+HARD_PATTERNS = {
+    "established_pass_through": 1, "sanctioned_name_variant": 1,
+    "sanctioned_country_variant": 1, "near_miss_clean": 0, "clean_country_variant": 0,
+}
+
+
+def test_hard_ledger_labels_each_new_pattern():
+    hard = _generator()(seed=7, hard=True)
+    for pattern, label in HARD_PATTERNS.items():
+        rows = hard[hard["pattern"] == pattern]
+        assert len(rows) >= 8, pattern
+        assert set(rows["is_laundering"]) == {label}, pattern
+
+
+def test_established_accounts_have_at_least_20_prior_clean_transactions():
+    hard = _generator()(seed=7, hard=True)
+    ts = pd.to_datetime(hard["timestamp"])
+    clean = hard[hard["pattern"] == "clean"]
+    for _, row in hard[hard["pattern"] == "established_pass_through"].iterrows():
+        when = pd.Timestamp(row["timestamp"])
+        for party in (row["sender"], row["receiver"]):
+            prior = clean[((clean["sender"] == party) | (clean["receiver"] == party))
+                          & (ts[clean.index] < when)]
+            assert len(prior) >= 20, (row["transaction_id"], party, len(prior))
+
+
+def test_name_variants_cover_each_kind_of_variation():
+    hard = _generator()(seed=7, hard=True)
+    kinds = {tid.split("-")[1] for tid in
+             hard.loc[hard["pattern"] == "sanctioned_name_variant", "transaction_id"]}
+    assert kinds == {"casing", "punctuation", "suffix", "reorder", "typo"}
+
+
+def test_country_variants_cover_codes_names_lowercase_and_aliases():
+    hard = _generator()(seed=7, hard=True)
+    risky = set(hard.loc[hard["pattern"] == "sanctioned_country_variant", "country"])
+    clean = set(hard.loc[hard["pattern"] == "clean_country_variant", "country"])
+    assert {"RU", "ru", "Russian Federation", "DPRK", "KP"} <= risky
+    assert {"GB", "UK", "united kingdom"} <= clean
+
+
+def test_seed_evaluation_counts_name_and_country_rule_hits_by_pattern():
+    evaluate = _evaluate_module()
+    result = evaluate.evaluate_seed(7)
+    assert result["rule_hits"]["sanctioned"] == (0, 6)  # (name rule rows, country rule rows)
+    assert result["rule_hits"]["fan_in"] == (0, 0)
+
+
 # --- audit trail -----------------------------------------------------------
 def test_audit_events_persist():
     db = Path(tempfile.mkdtemp()) / "audit.sqlite3"
