@@ -105,6 +105,14 @@ MAX_ML_FLAG_RATE = float(os.getenv("MAX_ML_FLAG_RATE", "0.30"))
 MIN_ROWS_FOR_ML = int(os.getenv("MIN_ROWS_FOR_ML", "25"))
 ML_RANDOM_STATE = 42
 
+# Pass-through features (utils/features.py): an outgoing payment counts as
+# passing money on when the sender received a payment in the previous
+# PASS_THROUGH_WINDOW_HOURS and sends on (1 - PASS_THROUGH_TOLERANCE) to 100%
+# of it. Chosen on the development seed (7) from a small grid; see
+# docs/EVALUATION.md. Wider windows matched too much ordinary traffic.
+PASS_THROUGH_WINDOW_HOURS = float(os.getenv("PASS_THROUGH_WINDOW_HOURS", "3"))
+PASS_THROUGH_TOLERANCE = float(os.getenv("PASS_THROUGH_TOLERANCE", "0.05"))
+
 # --- Tier 3: topology scoring ---
 CIRCULAR_FLOW_POINTS = int(os.getenv("CIRCULAR_FLOW_POINTS", "25"))
 CIRCULAR_FLOW_CAP = int(os.getenv("CIRCULAR_FLOW_CAP", "50"))

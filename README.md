@@ -25,7 +25,7 @@ Measured on a synthetic ledger of 465 transactions, 45 of them labelled as laund
 | Pipeline | Laundering caught (recall) | Flags that were real (precision) | Sent to the AI model |
 |---|---|---|---|
 | Original order (statistics first) | 7% | 33% | 9 rows |
-| Current order (rules first) | 84% | 79% | 48 rows |
+| Current order (rules first) | 84% | 75% | 51 rows |
 
 By type of laundering:
 
@@ -67,7 +67,7 @@ graph TD
 ```
 
 - **Tier 1, rules** (`utils/rules.py`): reporting threshold, the structuring band just below it, high-risk jurisdictions, fuzzy sanctions-name matching and unidentified counterparties. A rule hit always forces a review. Countries are resolved to ISO 3166-1 alpha-2 codes (`utils/jurisdictions.py`: codes, official names and common aliases such as DPRK or Burma) and compared exactly, so "Prussia" never matches "Russia". A country that can't be resolved is noted as an unresolved jurisdiction without forcing a review on its own.
-- **Tier 0, behaviour model** (`utils/funnel.py`, `utils/features.py`): twelve account-behaviour features scored against the batch's own median.
+- **Tier 0, behaviour model** (`utils/funnel.py`, `utils/features.py`): sixteen account-behaviour features scored against the batch's own median, including four that follow money passed straight on to another account.
 - **Tier 2, AI review** (`utils/agents.py`): retrieval-grounded analysis with a structured verdict. Runs on Claude Haiku 4.5 (Amazon Bedrock) or Gemini 2.5 Flash (Google Vertex AI), switchable in config. Transient model errors such as throttling or timeouts are retried with exponential backoff, up to `LLM_MAX_RETRIES` times after the first attempt (default 3, so at most 4 calls); errors a retry can't fix, such as bad credentials or an unknown model, fail at once.
 - **Tier 3, network check** (`utils/graph_nodes.py`, `utils/graph_logic.py`): circular flows, account velocity and hidden beneficiaries, over the full ledger. A high score pauses for an officer.
 
@@ -77,7 +77,7 @@ graph TD
 *Technical:* a rule hit sets a force-review flag the anomaly funnel can't override. With the original ordering, recall on the labelled set was 7%; with rules first it is 84%.
 
 **Behaviour matters more than amount.** An account is judged by how it acts: how fast it moves money, how many parties it deals with, how often it sits just under the limit.
-*Technical:* twelve behavioural features, flagged with a robust z-score against the batch's own median, instead of a fixed "flag 15%" quota.
+*Technical:* sixteen behavioural features, flagged with a robust z-score against the batch's own median, instead of a fixed "flag 15%" quota.
 
 **The AI answers in a fixed format.** The model's verdict is one of a few set answers, not free text that has to be interpreted.
 *Technical:* structured output with SUSPICIOUS, CLEAR or ERROR. An ERROR is never treated as clear.
@@ -130,7 +130,7 @@ python scripts/ingest_pdf.py --file path/to/aml_guidelines.pdf
 `requirements-dev.txt` is enough for the tests and the evaluation; it includes `langchain-core` and `pydantic` for the prompt-injection tests but skips the model providers and the UI libraries.
 
 ```bash
-pytest tests/ -v                          # 278 offline tests; the full install adds 9 app tests
+pytest tests/ -v                          # 285 offline tests; the full install adds 9 app tests
 python scripts/generate_sample_ledger.py  # fixed seed, so the numbers above reproduce exactly
 python scripts/evaluate.py                # recall and precision by laundering type
 python scripts/evaluate.py --seeds 7 11 13 17 19 23   # development seed plus held-out seeds
@@ -143,6 +143,7 @@ python scripts/evaluate.py --min-recall 1.0 --min-pattern-recall 1.0 \
 
 - **Synthetic data only.** The results come from generated data. Laundering rings routed through established businesses (`circular_camouflaged`) are mostly missed.
 - **Sanctions-name matching isn't measured by the evaluation.** No generated name is on the watchlist, so the `sanctioned` pattern is caught only by the country rule; fuzzy name matching is covered by unit tests, not by recall figures.
+- **Behaviour features look at the whole batch, future rows included.** That suits auditing a closed ledger; scoring payments as they arrive would need every feature computed only from earlier rows.
 - **Cycle thresholds are provisional.** The 1-day window and 20% amount tolerance were tuned on the synthetic ledger and still need checking against the IBM AML dataset.
 - **Ledgers without timestamps fall back to shape-only cycle detection,** which over-flags businesses that trade in both directions. The finding says when this happens.
 - **The network check only runs on rows an analyst selects.** A ring that nothing upstream flags is never examined.
