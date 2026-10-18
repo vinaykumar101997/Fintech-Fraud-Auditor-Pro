@@ -14,7 +14,9 @@ python scripts/evaluate.py                 # prints both pipelines side by side
 | Pipeline | Recall | Precision | F1 | Forwarded to the AI tier |
 |---|---|---|---|---|
 | Original ordering | 7% | 33% | 0.11 | 9 rows (2%) |
-| Current ordering | 84% | 79% | 0.82 | 48 rows (10%) |
+| Current ordering | 84% | 75% | 0.79 | 51 rows (11%) |
+
+The current ordering includes the pass-through features described below; before them it was 84% / 79% / 0.82 with 48 rows forwarded. The sections dated before 2026-10-18 record numbers measured at the time.
 
 Recall is the share of laundering rows forwarded for review instead of being dropped. It matters most here, because a dropped row is never looked at again.
 
@@ -26,7 +28,7 @@ Seed 7 is the development seed. The rule thresholds, the anomaly threshold, the 
 python scripts/evaluate.py --seeds 7 11 13 17 19 23
 ```
 
-Measured on 2026-10-18 with nothing in the pipeline changed:
+Measured on 2026-10-18 with nothing in the pipeline changed (before the pass-through features; the numbers with them are under "Pass-through features" below):
 
 | Seed | Role | Rows | Laundering | TP | FP | FN | Recall | Precision | F1 | Forwarded |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -65,7 +67,7 @@ What this shows and what it doesn't:
 python scripts/evaluate.py --seeds 7 11 13 17 19 23 --hard
 ```
 
-Measured on 2026-10-18, nothing in the pipeline changed. This is the baseline for any later change.
+Measured on 2026-10-18, nothing in the pipeline changed. This is the baseline the pass-through features below were judged against.
 
 | Seed | Role | Rows | Laundering | TP | FP | FN | Recall | Precision | F1 | Forwarded |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -102,6 +104,64 @@ What the harder patterns show:
 - **The name rule catches 45 of 50 variants and none of the near misses.** Casing, punctuation, suffix and reordering all score 100. The typo `Viktor Bouf` scores 90.9 and is caught; `Lazarus Groop` scores 70 and is missed, because "group" is stripped as a company suffix while the misspelt "groop" is kept. No near-miss name reaches the threshold of 88, but the margin is small: `Melli Bakery` scores 81.8 and `Victor Boutros` 80.0.
 - **Near-miss names cost precision, but not through the name rule.** All 39 forwarded `near_miss_clean` rows were selected by the behaviour model ("statistical anomaly") with no rule reason, and every one has a sender that appears only once in its ledger: they are forwarded for being one-off accounts, not for their names.
 - **Results swing a lot between seeds** (recall 48% to 71%), so a single seed says little.
+
+### Pass-through features
+
+Four features added to the behaviour model (`utils/features.py`), aimed at money passed straight on, including through established accounts. A payment is linked to the latest payment its sender received in the previous 3 hours if it sends on 95% to 100% of that amount; following the links gives chains.
+
+| Feature | Meaning |
+|---|---|
+| `hop_depth` | legs in the chain this payment belongs to (1 if none) |
+| `has_pass_through` | 1 if the payment passes on a recent incoming payment |
+| `dwell_hours` | how long the money sat with the sender |
+| `pass_through_ratio` | amount sent on / amount received |
+
+**Acceptance rule, fixed before measuring:** keep a feature set only if pooled held-out F1 on the hard ledgers rises by at least 0.03 and pooled held-out F1 on the default ledgers falls by no more than 0.02, with every parameter chosen on seed 7.
+
+**Choosing on seed 7.** Two candidate sets were tried. Cycle features (`in_cycle`, `cycle_length`, from the time-ordered fund-flow cycle check with its existing 1-day window and 20% tolerance) lowered seed 7's F1 on both ledgers (hard -0.079, default -0.100). Pass-through features were tried with six window/tolerance pairs:
+
+| Window, tolerance | Seed 7 hard F1 change | Seed 7 default F1 change |
+|---|---|---|
+| 3 h, 5% | **+0.049** | -0.026 |
+| 6 h, 5% | +0.039 | -0.034 |
+| 6 h, 10% | +0.034 | -0.072 |
+| 12 h, 10% | -0.017 | -0.093 |
+| 24 h, 10% | -0.046 | -0.173 |
+| 24 h, 20% | -0.030 | -0.126 |
+| cycle + pass-through, best pair | -0.013 | -0.126 |
+
+3 hours and 5% was the only candidate taken to the held-out seeds. Wider windows match more ordinary two-way trade by chance. On seed 7 its default-ledger drop (-0.026) was already slightly past the limit; the rule is applied to the held-out seeds, where it passed.
+
+**Held-out result (seeds 11, 13, 17, 19, 23):**
+
+| Ledger | Before: TP / FP / FN, F1 | After: TP / FP / FN, F1 | F1 change | Rule |
+|---|---|---|---|---|
+| hard | 235 / 92 / 140, 0.670 | 307 / 104 / 68, 0.781 | **+0.112** | needed >= +0.03 |
+| default | 198 / 64 / 32, 0.805 | 196 / 69 / 34, 0.792 | **-0.013** | needed >= -0.02 |
+
+Accepted. For information, the cycle set on the same seeds: hard -0.022, default -0.145 (clean rows forwarded rose from 64 to 170). It is not in the code.
+
+Per-seed numbers with the pass-through features:
+
+| Seed | Default: TP / FP / FN | Recall | Precision | F1 | Hard: TP / FP / FN | Recall | Precision | F1 |
+|---|---|---|---|---|---|---|---|---|
+| 7 (dev) | 38 / 13 / 7 | 84% | 75% | 0.79 | 53 / 16 / 21 | 72% | 77% | 0.74 |
+| 11 | 41 / 7 / 9 | 82% | 85% | 0.84 | 48 / 14 / 31 | 61% | 77% | 0.68 |
+| 13 | 40 / 12 / 6 | 87% | 77% | 0.82 | 58 / 16 / 17 | 77% | 78% | 0.78 |
+| 17 | 40 / 14 / 6 | 87% | 74% | 0.80 | 69 / 23 / 6 | 92% | 75% | 0.83 |
+| 19 | 39 / 10 / 6 | 87% | 80% | 0.83 | 67 / 25 / 7 | 91% | 73% | 0.81 |
+| 23 | 36 / 26 / 7 | 84% | 58% | 0.69 | 65 / 26 / 7 | 90% | 71% | 0.80 |
+| **Pooled held out** | 196 / 69 / 34 | **85.2%** (80.1-89.2%) | **74.0%** (68.4-78.9%) | 0.79 | 307 / 104 / 68 | **81.9%** (77.7-85.4%) | **74.7%** (70.3-78.7%) | 0.78 |
+
+What changed, pooled held out:
+
+- **Hard ledgers:** `established_pass_through` 0/45 to **42/45**; `fan_in` 13/55 to 33/55; `circular_small` 28/46 to 37/46; `sanctioned_name_variant` 49/50 to 50/50. False positives rose from 92 to 104 (near-miss names 39 to 44, clean-country variants 11 to 15, clean 42 to 45).
+- **Default ledgers:** `circular_small` 46/46 to 45/46 and `circular_camouflaged` 2/34 to 1/34; clean rows forwarded 64 to 69.
+- **Seed 7, which CI gates:** recall unchanged (38/45, every gated pattern still 100%), precision 79% to 75% (clean rows forwarded 10 to 13).
+- **Cost:** Tier 0+1 time on the 465-row seed-7 ledger went from about 550 ms to about 1,320 ms, from the pass-through matching loop.
+- **`fan_in` gains are a side effect.** No pass-through feature describes fan-in; adding features changes how Isolation Forest splits the batch, and the fan-in rows happened to stand out more.
+
+**Point in time.** These are batch features: counts, volumes, fan-in and the pass-through chain all use every row in the ledger, including rows dated after the payment being scored (`hop_depth` follows money forward as well as back). That is fine for auditing a closed ledger. Scoring payments as they arrive would need each feature computed only from earlier rows, and the numbers above would not carry over.
 
 ### Latest run: 2026-10-17
 

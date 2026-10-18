@@ -6,6 +6,12 @@ to it by construction. These features describe how an account *behaves* across
 the batch, which is where the signal actually lives.
 
 Every feature is computed from the batch itself, so this stays unsupervised.
+
+Point in time: these are batch features. Counts, volumes, fan-in and the
+pass-through chain all use every row in the batch, including rows dated after
+the transaction being scored (hop_depth follows the money forward as well as
+back). That is fine for auditing a closed ledger. Scoring payments as they
+arrive would need each feature computed only from rows before the payment.
 """
 
 from __future__ import annotations
@@ -28,7 +34,13 @@ FEATURE_COLUMNS = [
     "receiver_fan_in",
     "country_rarity",
     "sender_burst_score",
+    "hop_depth",
+    "has_pass_through",
+    "dwell_hours",
+    "pass_through_ratio",
 ]
+
+PASS_THROUGH_COLUMNS = ["hop_depth", "has_pass_through", "dwell_hours", "pass_through_ratio"]
 
 
 def _is_round(series: pd.Series) -> pd.Series:
@@ -84,8 +96,81 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     work["country_rarity"] = 1.0 - country.map(freq).fillna(0.0).astype(float)
 
     work["sender_burst_score"] = _burst_score(df, sender)
+    work[PASS_THROUGH_COLUMNS] = pass_through_features(df)
 
     return work[FEATURE_COLUMNS].replace([np.inf, -np.inf], 0.0).fillna(0.0)
+
+
+def pass_through_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Money that comes in and goes straight back out, at almost the same amount.
+
+    For each payment, the predecessor is the latest payment the sender received
+    in the PASS_THROUGH_WINDOW_HOURS before it, of an amount the payment is
+    (1 - PASS_THROUGH_TOLERANCE) to 100% of. Linking each payment to its
+    predecessor gives chains:
+
+      hop_depth          - legs in the chain this payment belongs to (1 alone)
+      has_pass_through   - 1 if this payment has a predecessor
+      dwell_hours        - hours the money sat with the sender (0 if none)
+      pass_through_ratio - this amount / the predecessor's amount (0 if none)
+
+    This looks at accounts' timing and amounts, not at their age, so it applies
+    to established accounts as much as new ones. Without timestamps every row
+    gets hop_depth 1 and zeros.
+    """
+    out = pd.DataFrame(
+        {"hop_depth": 1.0, "has_pass_through": 0.0, "dwell_hours": 0.0, "pass_through_ratio": 0.0},
+        index=df.index,
+    )
+    if "timestamp" not in df.columns:
+        return out
+    ts = pd.to_datetime(df["timestamp"], errors="coerce")
+    if ts.isna().all():
+        return out
+
+    amount = df["amount_float"].astype(float)
+    sender = df["sender"].astype(str)
+    receiver = df["receiver"].astype(str)
+    window = pd.Timedelta(hours=config.PASS_THROUGH_WINDOW_HOURS)
+    low = 1.0 - config.PASS_THROUGH_TOLERANCE
+
+    received = {}
+    for i in df.index:
+        received.setdefault(receiver[i], []).append(i)
+
+    pred = {}
+    for i in df.index:
+        best = None
+        if not pd.isna(ts[i]):
+            for j in received.get(sender[i], []):
+                if j == i or pd.isna(ts[j]) or amount[j] <= 0:
+                    continue
+                if ts[i] - window <= ts[j] < ts[i] and low <= amount[i] / amount[j] <= 1.0:
+                    if best is None or ts[j] > ts[best]:
+                        best = j
+        pred[i] = best
+
+    succ = {}
+    for i, j in pred.items():
+        if j is not None and (j not in succ or ts[i] < ts[succ[j]]):
+            succ[j] = i
+
+    def length(start, links):
+        steps, node, seen = 0, links.get(start), {start}
+        while node is not None and node not in seen:
+            seen.add(node)
+            steps += 1
+            node = links.get(node)
+        return steps
+
+    for i in df.index:
+        out.at[i, "hop_depth"] = float(1 + length(i, pred) + length(i, succ))
+        j = pred[i]
+        if j is not None:
+            out.at[i, "has_pass_through"] = 1.0
+            out.at[i, "dwell_hours"] = (ts[i] - ts[j]).total_seconds() / 3600.0
+            out.at[i, "pass_through_ratio"] = amount[i] / amount[j]
+    return out
 
 
 def _burst_score(df: pd.DataFrame, sender: pd.Series) -> pd.Series:

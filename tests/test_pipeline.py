@@ -311,7 +311,7 @@ def test_development_seed_matches_the_file_based_evaluation():
     evaluate = _evaluate_module()
     result = evaluate.evaluate_seed(evaluate.DEV_SEED)
     assert (result["rows"], result["laundering"]) == (465, 45)
-    assert (result["tp"], result["fp"], result["fn"], result["forwarded"]) == (38, 10, 7, 48)
+    assert (result["tp"], result["fp"], result["fn"], result["forwarded"]) == (38, 13, 7, 51)
 
 
 @pytest.mark.parametrize("k,n,low,high", [
@@ -332,6 +332,58 @@ def test_pooled_counts_are_sums_of_the_seed_counts():
     pooled = evaluate.pool(runs)
     assert (pooled["tp"], pooled["fp"], pooled["fn"], pooled["tn"]) == (7, 1, 3, 21)
     assert pooled["per_pattern"] == {"fan_in": (9, 5), "circular": (1, 1)}
+
+
+# --- pass-through features -------------------------------------------------
+def _ledger_legs(*legs):
+    """legs: (sender, receiver, amount, minutes after 09:00)."""
+    base = datetime(2026, 3, 2, 9, 0)
+    return pd.DataFrame([
+        {"transaction_id": f"L{i}", "sender": s, "receiver": r, "amount_float": float(a),
+         "timestamp": base + timedelta(minutes=m)}
+        for i, (s, r, a, m) in enumerate(legs)])
+
+
+def test_pass_through_chain_gets_its_depth_dwell_and_ratio():
+    from utils.features import pass_through_features
+
+    out = pass_through_features(_ledger_legs(("A", "B", 1000, 0), ("B", "C", 980, 60), ("C", "D", 970, 120)))
+    assert out["hop_depth"].tolist() == [3.0, 3.0, 3.0]
+    assert out["has_pass_through"].tolist() == [0.0, 1.0, 1.0]
+    assert out["dwell_hours"].tolist() == [0.0, 1.0, 1.0]
+    assert out["pass_through_ratio"].round(4).tolist() == [0.0, 0.98, round(970 / 980, 4)]
+
+
+@pytest.mark.parametrize("onward", [
+    ("B", "C", 1010, 60),   # more out than came in
+    ("B", "C", 900, 60),    # more than 5% kept back
+    ("B", "C", 990, 240),   # outside the 3-hour window
+    ("B", "C", 990, -60),   # sent before the money arrived
+], ids=["grows", "too-much-kept", "too-late", "before-arrival"])
+def test_unrelated_onward_payment_is_not_a_pass_through(onward):
+    from utils.features import pass_through_features
+
+    out = pass_through_features(_ledger_legs(("A", "B", 1000, 0), onward))
+    assert out["has_pass_through"].tolist() == [0.0, 0.0]
+    assert out["hop_depth"].tolist() == [1.0, 1.0]
+
+
+def test_pass_through_features_without_timestamps_are_neutral():
+    from utils.features import pass_through_features
+
+    frame = _ledger_legs(("A", "B", 1000, 0), ("B", "C", 990, 60)).drop(columns=["timestamp"])
+    out = pass_through_features(frame)
+    assert out["has_pass_through"].tolist() == [0.0, 0.0]
+    assert out["hop_depth"].tolist() == [1.0, 1.0]
+
+
+def test_behaviour_features_include_pass_through_and_ignore_labels():
+    from utils.features import FEATURE_COLUMNS, build_features
+
+    frame = _ledger_legs(("A", "B", 1000, 0), ("B", "C", 980, 60)).assign(country="USA")
+    labelled = frame.assign(is_laundering=[1, 0], pattern=["x", "y"])
+    assert {"hop_depth", "has_pass_through", "dwell_hours", "pass_through_ratio"} <= set(FEATURE_COLUMNS)
+    pd.testing.assert_frame_equal(build_features(frame), build_features(labelled))
 
 
 def test_funnel_flag_rate_tracks_the_data():
