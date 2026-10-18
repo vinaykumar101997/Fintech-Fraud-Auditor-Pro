@@ -8,6 +8,9 @@ Changes from the original build:
     names hardcoded in the UI file. Refresh it from the OFAC SDN publication.
   - Names are normalised (accents, punctuation, corporate suffixes, ordering)
     before comparison, so "PUTIN, Vladimir" and "Vladimir Putin" match.
+  - Each name is also compared with its suffixes kept, and the higher score
+    counts, so a misspelt suffix ("Lazarus Groop") is not left as a stray
+    name token that the stripped comparison penalises.
   - extractOne's None return is handled rather than unpacked blindly.
 """
 
@@ -49,6 +52,7 @@ class WatchlistEntry:
     canonical: str
     normalized: str
     entry_type: str
+    full: str = ""
 
 
 @dataclass(frozen=True)
@@ -59,14 +63,22 @@ class ScreeningHit:
     entry_type: str
 
 
-def normalize_name(raw: str) -> str:
-    """Canonical form for comparison: accent-folded, depunctuated, sorted tokens."""
+def _tokens(raw: str) -> List[str]:
     text = unicodedata.normalize("NFKD", str(raw or ""))
     text = "".join(ch for ch in text if not unicodedata.combining(ch))
-    text = _PUNCT.sub(" ", text.lower())
-    tokens = [t for t in text.split() if t and t not in _SUFFIXES]
+    return _PUNCT.sub(" ", text.lower()).split()
+
+
+def normalize_name(raw: str) -> str:
+    """Canonical form for comparison: accent-folded, depunctuated, sorted tokens."""
+    tokens = [t for t in _tokens(raw) if t not in _SUFFIXES]
     # Sorting makes "Putin Vladimir" and "Vladimir Putin" identical.
     return " ".join(sorted(tokens))
+
+
+def full_name(raw: str) -> str:
+    """normalize_name with corporate suffixes kept."""
+    return " ".join(sorted(_tokens(raw)))
 
 
 @lru_cache(maxsize=1)
@@ -98,7 +110,7 @@ def load_watchlist() -> Tuple[Tuple[WatchlistEntry, ...], bool]:
         for variant in variants:
             norm = normalize_name(variant)
             if norm:
-                entries.append(WatchlistEntry(canonical, norm, entry_type))
+                entries.append(WatchlistEntry(canonical, norm, entry_type, full_name(variant)))
 
     return tuple(entries), using_real_list
 
@@ -109,61 +121,42 @@ def _choices(entries: Tuple[WatchlistEntry, ...]) -> Tuple[str, ...]:
     return tuple(e.normalized for e in entries)
 
 
-def screen(name: str, threshold: Optional[int] = None) -> Optional[ScreeningHit]:
-    """Fuzzy-match a name against the watchlist. Returns None below threshold."""
-    from rapidfuzz import fuzz, process  # imported lazily so tests can run without it
-
-    cutoff = config.SCREENING_MATCH_THRESHOLD if threshold is None else threshold
-    query = normalize_name(name)
-    if not query:
-        return None
-
-    entries, _ = load_watchlist()
-    if not entries:
-        return None
-
-    match = process.extractOne(query, _choices(entries), scorer=fuzz.token_sort_ratio,
-                               score_cutoff=cutoff)
-    if match is None:
-        return None
-
-    _, score, index = match
-    entry = entries[index]
-    return ScreeningHit(
-        query=name, matched_name=entry.canonical, score=float(score), entry_type=entry.entry_type
-    )
+@lru_cache(maxsize=4)
+def _full_choices(entries: Tuple[WatchlistEntry, ...]) -> Tuple[str, ...]:
+    """Watchlist names with suffixes kept, built once per loaded list."""
+    return tuple(e.full for e in entries)
 
 
-def screen_many(
-    names: Iterable[str], threshold: Optional[int] = None
-) -> Dict[str, Optional[ScreeningHit]]:
-    """Screen many names in one pass; the result for each name equals screen(name).
+def _best_matches(names: Iterable[str], cutoff: float) -> Dict[str, Optional[ScreeningHit]]:
+    """Best watchlist entry per name at or above cutoff, or None.
 
-    Each distinct normalised name is scored against the whole watchlist with a
-    single rapidfuzz cdist call instead of one extractOne call per ledger row.
-    Ties go to the first watchlist entry, as with extractOne.
+    Each distinct name is scored against the whole watchlist twice, suffixes
+    stripped and kept, with one rapidfuzz cdist call each; an entry's score is
+    the higher of the two. Ties go to the first watchlist entry. A name made
+    only of suffixes ("The Group") is not screened.
     """
     from rapidfuzz import fuzz, process  # imported lazily so tests can run without it
     import numpy as np
 
-    cutoff = config.SCREENING_MATCH_THRESHOLD if threshold is None else threshold
     unique = list(dict.fromkeys(names))
     results: Dict[str, Optional[ScreeningHit]] = {name: None for name in unique}
 
     entries, _ = load_watchlist()
-    by_query: Dict[str, List[str]] = {}
+    by_query: Dict[Tuple[str, str], List[str]] = {}
     for name in unique:
         query = normalize_name(name)
         if query:
-            by_query.setdefault(query, []).append(name)
+            by_query.setdefault((query, full_name(name)), []).append(name)
     if not entries or not by_query:
         return results
 
     queries = list(by_query)
-    # float64 so scores compare exactly with extractOne's at the threshold.
-    scores = process.cdist(queries, _choices(entries), scorer=fuzz.token_sort_ratio,
-                           score_cutoff=cutoff, dtype=np.float64)
-    for query, row in zip(queries, scores):
+    # float64 so scores compare exactly with the threshold.
+    stripped = process.cdist([q for q, _ in queries], _choices(entries),
+                             scorer=fuzz.token_sort_ratio, dtype=np.float64)
+    kept = process.cdist([f for _, f in queries], _full_choices(entries),
+                         scorer=fuzz.token_sort_ratio, dtype=np.float64)
+    for query, row in zip(queries, np.maximum(stripped, kept)):
         index = int(row.argmax())
         score = float(row[index])
         if score < cutoff:
@@ -176,19 +169,24 @@ def screen_many(
     return results
 
 
+def screen(name: str, threshold: Optional[int] = None) -> Optional[ScreeningHit]:
+    """Fuzzy-match a name against the watchlist. Returns None below threshold."""
+    cutoff = config.SCREENING_MATCH_THRESHOLD if threshold is None else threshold
+    return _best_matches([name], cutoff)[name]
+
+
+def screen_many(
+    names: Iterable[str], threshold: Optional[int] = None
+) -> Dict[str, Optional[ScreeningHit]]:
+    """Screen many names in one pass; the result for each name equals screen(name)."""
+    cutoff = config.SCREENING_MATCH_THRESHOLD if threshold is None else threshold
+    return _best_matches(names, cutoff)
+
+
 def best_effort_match(name: str) -> Optional[Tuple[str, float]]:
     """Highest-scoring candidate regardless of threshold, for UI transparency."""
-    from rapidfuzz import fuzz, process
-
-    query = normalize_name(name)
-    entries, _ = load_watchlist()
-    if not query or not entries:
-        return None
-    match = process.extractOne(query, _choices(entries), scorer=fuzz.token_sort_ratio)
-    if match is None:
-        return None
-    _, score, index = match
-    return entries[index].canonical, float(score)
+    hit = _best_matches([name], 0)[name]
+    return (hit.matched_name, hit.score) if hit else None
 
 
 class ScreeningUnavailable(RuntimeError):

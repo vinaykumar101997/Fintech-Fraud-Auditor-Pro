@@ -43,6 +43,7 @@ ALIASES: Dict[str, str] = {
     "cape verde": "CV",
     "east timor": "TL",
     "holland": "NL",
+    "deutschland": "DE",
     "brunei": "BN",
     "macau": "MO",
     "vatican": "VA",

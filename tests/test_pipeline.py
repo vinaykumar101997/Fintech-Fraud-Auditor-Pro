@@ -146,6 +146,14 @@ def test_resolved_country_adds_no_jurisdiction_reason():
     assert _rules("Germany").reasons == []
 
 
+@pytest.mark.parametrize("country", ["Deutschland", "deutschland", "DEUTSCHLAND"])
+def test_german_country_name_resolves_to_germany(country):
+    from utils.jurisdictions import resolve_country
+
+    assert resolve_country(country) == "DE"
+    assert _rules(country).reasons == []
+
+
 def test_jurisdiction_lists_are_iso_alpha2_codes():
     import pycountry
 
@@ -914,6 +922,35 @@ def test_name_normalization_is_order_and_suffix_insensitive(a, b):
     assert normalize_name(a) == normalize_name(b)
 
 
+@pytest.mark.parametrize("name", ["Lazarus Groop", "Lazarus Gruop", "Lazarus Grp", "Wagner Grupo"])
+def test_misspelt_company_suffix_still_matches_the_listed_name(name):
+    """"Group" is stripped as a suffix, but a misspelling of it used to be kept
+    as a name token, so "Lazarus Groop" scored 70 against "Lazarus Group"."""
+    from utils.screening import screen
+
+    hit = screen(name)
+    assert hit is not None and hit.score >= config.SCREENING_MATCH_THRESHOLD
+    assert hit.matched_name == ("Wagner Group" if name.startswith("Wagner") else "Lazarus Group")
+
+
+@pytest.mark.parametrize("name", ["Victor Boutros", "Viktoria Boutique", "Tornado Sports Ltd",
+                                  "Wagner Plumbing", "Lazarus Dental Group", "Sinaloa Grill",
+                                  "Melli Bakery", "Kimberly Jones", "Putnam Valley Farms",
+                                  "Cash Tornado Car Wash", "Lazarus Grove", "Northwind Group",
+                                  "Tornado Group", "Melli Group", "Kim Group", "Acme Group"])
+def test_near_miss_names_stay_below_the_threshold(name):
+    from utils.screening import screen
+
+    assert screen(name) is None
+
+
+@pytest.mark.parametrize("name", ["The Group", "Group Ltd", "Holdings Limited"])
+def test_names_made_only_of_suffixes_are_not_screened(name):
+    from utils.screening import screen
+
+    assert screen(name) is None
+
+
 def test_rule_screener_fails_closed_without_rapidfuzz(monkeypatch):
     """A missing dependency used to return None - 'no match' - for every
     name, silently disabling sanctions screening for the whole batch."""
@@ -1010,7 +1047,8 @@ def _labelled_ledger_with_watchlist_names():
     ledger["amount"] = ledger["amount"].map(parse_money)
     extra = [("Viktor Bout", "Acme Ltd"), ("Acme Ltd", "BOUT, Viktor"), ("V. Bout", "Putin V.V."),
              ("Tornado Cash Ltd", "Lazarus Grp"), ("Kim Jong-Un", "Melli Bank"),
-             ("Wagner", "Sinaloa Cartell"), ("Unknown_Entity", "Internal_Wallet")]
+             ("Wagner", "Sinaloa Cartell"), ("Lazarus Groop", "Wagner Grupo"),
+             ("Lazarus Dental Group", "The Group"), ("Unknown_Entity", "Internal_Wallet")]
     rows = [{"transaction_id": f"W{i}", "sender": s, "receiver": r,
              "amount": Decimal("100"), "country": "USA"} for i, (s, r) in enumerate(extra)]
     return pd.concat([ledger, pd.DataFrame(rows)], ignore_index=True)
