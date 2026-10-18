@@ -100,8 +100,8 @@ What the harder patterns show:
 
 - **Laundering through established accounts is not caught at all** (0/45 held out, 0/9 on seed 7). Nothing in Tier 0 or Tier 1 looks at a chain of ordinary businesses passing money on.
 - **Adding the new rows broke detection of `fan_in` and `circular_small`.** `fan_in` falls from 55/55 to 13/55 held out (11/11 to 0/11 on seed 7) and `circular_small` from 46/46 to 28/46. The behaviour model flags about the same number of rows either way (44 vs 45 on seed 7), but the new patterns bring many one-off accounts: on seed 7, accounts seen once rise from 11 of 36 to 31 of 57. Those two patterns were caught because their accounts were new and new accounts were rare. Once one-off counterparties are common, as they are in real ledgers, that signal fades.
-- **Country resolution works on every format here.** The country rule fires on 50/50 country variants held out and on 0/50 clean variants. `Deutschland` is not resolved; it gets an unresolved-jurisdiction note and no flag.
-- **The name rule catches 45 of 50 variants and none of the near misses.** Casing, punctuation, suffix and reordering all score 100. The typo `Viktor Bouf` scores 90.9 and is caught; `Lazarus Groop` scores 70 and is missed, because "group" is stripped as a company suffix while the misspelt "groop" is kept. No near-miss name reaches the threshold of 88, but the margin is small: `Melli Bakery` scores 81.8 and `Victor Boutros` 80.0.
+- **Country resolution works on every format here.** The country rule fires on 50/50 country variants held out and on 0/50 clean variants. `Deutschland` is not resolved; it gets an unresolved-jurisdiction note and no flag. (Fixed later; see "Two fixes found on the hard ledgers".)
+- **The name rule catches 45 of 50 variants and none of the near misses.** Casing, punctuation, suffix and reordering all score 100. The typo `Viktor Bouf` scores 90.9 and is caught; `Lazarus Groop` scores 70 and is missed, because "group" is stripped as a company suffix while the misspelt "groop" is kept. (Fixed later; see "Two fixes found on the hard ledgers".) No near-miss name reaches the threshold of 88, but the margin is small: `Melli Bakery` scores 81.8 and `Victor Boutros` 80.0.
 - **Near-miss names cost precision, but not through the name rule.** All 39 forwarded `near_miss_clean` rows were selected by the behaviour model ("statistical anomaly") with no rule reason, and every one has a sender that appears only once in its ledger: they are forwarded for being one-off accounts, not for their names.
 - **Results swing a lot between seeds** (recall 48% to 71%), so a single seed says little.
 
@@ -171,6 +171,22 @@ What changed, pooled held out:
 - **`fan_in` gains are a side effect.** No pass-through feature describes fan-in; adding features changes how Isolation Forest splits the batch, and the fan-in rows happened to stand out more.
 
 **Point in time.** These are batch features: counts, volumes, fan-in and the pass-through chain all use every row in the ledger, including rows dated after the payment being scored (`hop_depth` follows money forward as well as back). That is fine for auditing a closed ledger. Scoring payments as they arrive would need each feature computed only from earlier rows, and the numbers above would not carry over.
+
+### Two fixes found on the hard ledgers
+
+Both problems were found by looking at the held-out hard ledgers, so **for these two items the hard ledgers are no longer fully held out**: the numbers below show that the fixes work on the cases that revealed them, not that they generalise. The 88 screening threshold is unchanged.
+
+- **`Deutschland` resolves to Germany.** It is added to the country aliases in `utils/jurisdictions.py`; before, it got an unresolved-jurisdiction note.
+- **A misspelt company suffix no longer sinks a match.** "Lazarus Groop" was normalised to "groop lazarus" (the real suffix "group" is stripped, a misspelling of it is not) and scored 70 against "lazarus". Each name is now also compared with its suffixes kept ("groop lazarus" against "group lazarus"), and the higher of the two scores counts. "Lazarus Groop" now scores 92.3; "Lazarus Gruop", "Lazarus Grp" and "Wagner Grupo" also match. A name made only of suffixes ("The Group") is still not screened.
+- **Near misses keep their margin.** Kept suffixes raise some scores: `Lazarus Dental Group` goes from 66.7 to 78.8 and `Lazarus Grove` from 70.0 to 84.6, both below 88. A test checks that the ten near-miss names, and names such as `Northwind Group` and `Tornado Group`, stay below the threshold. Removing near-suffix words instead was rejected: it made `Grout Lazarus` an exact match and dropped `Trost` from `Hans Trost`.
+- **Still open.** `Sinaloa Cartel Limted` (a misspelt suffix on a name that otherwise matches) still scores 84.2 and is not matched. The closest near-miss name, `Lazarus Grove`, now scores 84.6 against the threshold of 88, a margin of 3.4 points that should be re-checked on a larger watchlist.
+
+Measured on 2026-10-18:
+
+- **Default ledgers:** every number is unchanged (seed 7: 84% / 75% / 0.79, 51 forwarded; pooled held out 196 / 69 / 34).
+- **Hard ledgers:** the name rule fires on 50/50 held-out `sanctioned_name_variant` rows (was 45) and 10/10 on seed 7 (was 9). Those rows were already forwarded by the behaviour model, so pooled held-out TP / FP / FN stays 307 / 104 / 68. Seed 7 gains one TP (53 to 54).
+- **`clean_country_variant`:** the country rule still fires on 0/50; the `Deutschland` rows lose the unresolved-jurisdiction note, and forwarding is unchanged at 15/50.
+- **Speed:** bulk screening of 39,990 names (36 distinct) is about 1 ms before and after.
 
 ### Latest run: 2026-10-17
 
