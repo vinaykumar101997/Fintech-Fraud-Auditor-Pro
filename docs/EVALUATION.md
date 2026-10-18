@@ -18,6 +18,37 @@ python scripts/evaluate.py                 # prints both pipelines side by side
 
 Recall is the share of laundering rows forwarded for review instead of being dropped. It matters most here, because a dropped row is never looked at again.
 
+### Development seed and held-out seeds
+
+Seed 7 is the development seed. The rule thresholds, the anomaly threshold, the cycle window and tolerance, and the generator changes described below were all chosen while looking at seed 7's results, so its numbers are optimistic by construction. Seeds 11, 13, 17, 19 and 23 were not used for any of those choices. Each produces a ledger from the same generator with different random draws:
+
+```bash
+python scripts/evaluate.py --seeds 7 11 13 17 19 23
+```
+
+Measured on 2026-10-18 with nothing in the pipeline changed:
+
+| Seed | Role | Rows | Laundering | TP | FP | FN | Recall | Precision | F1 | Forwarded |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 7 | development | 465 | 45 | 38 | 10 | 7 | 84% | 79% | 0.82 | 48 |
+| 11 | held out | 470 | 50 | 43 | 13 | 7 | 86% | 77% | 0.81 | 56 |
+| 13 | held out | 466 | 46 | 40 | 7 | 6 | 87% | 85% | 0.86 | 47 |
+| 17 | held out | 466 | 46 | 40 | 12 | 6 | 87% | 77% | 0.82 | 52 |
+| 19 | held out | 465 | 45 | 39 | 9 | 6 | 87% | 81% | 0.84 | 48 |
+| 23 | held out | 463 | 43 | 36 | 23 | 7 | 84% | 61% | 0.71 | 59 |
+| **Pooled held out** | | 2,330 | 230 | 198 | 64 | 32 | **86.1%** (95% CI 81.0% to 90.0%) | **75.6%** (95% CI 70.0% to 80.4%) | 0.80 | 262 |
+
+The intervals are Wilson score intervals on the pooled counts (198/230 for recall, 198/262 for precision).
+
+Caught/total by pattern, pooled over the held-out seeds: structuring 50/50, sanctioned 30/30, fan_in 55/55, circular 15/15, circular_small 46/46, circular_camouflaged 2/34; clean rows forwarded 64/2,100.
+
+What this shows and what it doesn't:
+
+- **Every gated pattern stays at 100% on every held-out seed.** The only misses are `circular_camouflaged`, as on the development seed.
+- **Precision is lower and less stable than on seed 7.** It ranges from 61% to 85%; seed 23 forwards 23 clean rows against 10 on seed 7. The development seed's 79% is not a good guide to precision.
+- **Pooled recall is higher than seed 7's** only because the held-out ledgers happen to contain fewer `circular_camouflaged` rows relative to the patterns that are always caught.
+- **"Held out" means new random draws, not new behaviour.** The same author wrote the generator, the patterns and the detector, so these seeds test whether the numbers survive different random data, not whether the detector finds laundering it wasn't designed for.
+
 ### Latest run: 2026-10-17
 
 The same steps CI runs, on Python 3.12.10 (the version CI uses) on Windows 11, in a venv installed from `requirements.lock.txt`, after ISO country matching, the retry-count fix and the watchlist cleanup:

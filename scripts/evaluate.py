@@ -12,17 +12,25 @@ LLM and no network. Pass --with-llm to include the compliance tier.
     python scripts/evaluate.py --with-llm
     python scripts/evaluate.py --min-recall 1.0 --min-pattern-recall 1.0 \
         --gate-exclude circular_camouflaged
+    python scripts/evaluate.py --seeds 7 11 13 17 19 23
+
+--seeds generates a fresh labelled ledger per seed in memory and reports each
+one, then pooled counts over the held-out seeds with Wilson 95% intervals.
+Seed 7 is the development seed: thresholds were chosen while looking at it.
 """
 
 from __future__ import annotations
 
 import argparse
+import io
+import math
 import sys
 from pathlib import Path
 
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import config  # noqa: E402
 from utils.data_loader import load_ledger  # noqa: E402
@@ -114,7 +122,117 @@ def legacy_pipeline(df: pd.DataFrame) -> pd.Series:
     return pd.Series(kept, index=df.index) & tier1
 
 
-def main() -> int:
+DEV_SEED = 7
+HELD_OUT_SEEDS = (11, 13, 17, 19, 23)
+
+
+def wilson_interval(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
+    """Wilson score interval for a binomial proportion k/n (95% by default)."""
+    if n == 0:
+        return 0.0, 1.0
+    p = k / n
+    denom = 1 + z * z / n
+    centre = (p + z * z / (2 * n)) / denom
+    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denom
+    return max(0.0, centre - half), min(1.0, centre + half)
+
+
+def evaluate_seed(seed: int) -> dict:
+    """Generate the labelled ledger for `seed` and score Tiers 0+1 on it.
+
+    Goes through the same CSV round trip and loader as the file-based run, so
+    seed 7 reproduces the numbers of `python scripts/evaluate.py`.
+    """
+    from generate_sample_ledger import generate
+
+    text = generate(seed=seed).to_csv(index=False)
+    labels = pd.read_csv(io.StringIO(text))
+    ledger, _ = load_ledger(io.StringIO(text))
+    ledger = ledger.drop(columns=["is_laundering", "pattern"], errors="ignore").merge(
+        labels[["transaction_id", "is_laundering", "pattern"]], on="transaction_id", how="left"
+    )
+    truth = ledger["is_laundering"].fillna(0).astype(int)
+    result = run_funnel(apply_rules(ledger, screener=rule_screener))
+    predicted = ledger["transaction_id"].isin(set(result.flagged["transaction_id"]))
+    m = metrics(truth, predicted)
+    return {
+        "seed": seed,
+        "rows": len(ledger),
+        "laundering": int(truth.sum()),
+        "tp": m["tp"], "fp": m["fp"], "fn": m["fn"], "tn": m["tn"],
+        "forwarded": int(result.forwarded),
+        "per_pattern": {
+            pattern: (len(group), int(predicted[group.index].sum()))
+            for pattern, group in ledger.groupby("pattern")
+        },
+    }
+
+
+def pool(runs: list[dict]) -> dict:
+    """Sum the counts of several seed runs."""
+    pooled = {key: sum(r[key] for r in runs)
+              for key in ("rows", "laundering", "tp", "fp", "fn", "tn", "forwarded")}
+    per_pattern: dict[str, tuple[int, int]] = {}
+    for run in runs:
+        for pattern, (total, caught) in run["per_pattern"].items():
+            t, c = per_pattern.get(pattern, (0, 0))
+            per_pattern[pattern] = (t + total, c + caught)
+    pooled["per_pattern"] = per_pattern
+    return pooled
+
+
+def _rates(r: dict) -> tuple[float, float, float]:
+    recall = r["tp"] / (r["tp"] + r["fn"]) if r["tp"] + r["fn"] else 0.0
+    precision = r["tp"] / (r["tp"] + r["fp"]) if r["tp"] + r["fp"] else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+    return recall, precision, f1
+
+
+def report_seeds(seeds: list[int]) -> int:
+    runs = [evaluate_seed(s) for s in seeds]
+
+    print("\n" + "=" * 78)
+    print(f"FUNNEL EVALUATION BY SEED  (development seed {DEV_SEED}; others held out)")
+    print("=" * 78)
+    print(f"\n{'seed':<6}{'role':<10}{'rows':>6}{'laund.':>8}{'TP':>5}{'FP':>5}{'FN':>5}"
+          f"{'recall':>9}{'precision':>11}{'F1':>7}{'forwarded':>11}")
+    for r in runs:
+        recall, precision, f1 = _rates(r)
+        role = "dev" if r["seed"] == DEV_SEED else "held-out"
+        print(f"{r['seed']:<6}{role:<10}{r['rows']:>6}{r['laundering']:>8}{r['tp']:>5}{r['fp']:>5}"
+              f"{r['fn']:>5}{recall:>8.0%}{precision:>11.0%}{f1:>7.2f}{r['forwarded']:>11}")
+
+    patterns = sorted({p for r in runs for p in r["per_pattern"]})
+    print("\ncaught/total by pattern")
+    print(f"{'pattern':<22}" + "".join(f"{r['seed']:>9}" for r in runs))
+    for pattern in patterns:
+        cells = []
+        for r in runs:
+            total, caught = r["per_pattern"].get(pattern, (0, 0))
+            cells.append(f"{caught}/{total}")
+        print(f"{pattern:<22}" + "".join(f"{c:>9}" for c in cells))
+
+    held_out = [r for r in runs if r["seed"] != DEV_SEED]
+    if held_out:
+        p = pool(held_out)
+        recall, precision, f1 = _rates(p)
+        r_lo, r_hi = wilson_interval(p["tp"], p["tp"] + p["fn"])
+        p_lo, p_hi = wilson_interval(p["tp"], p["tp"] + p["fp"])
+        names = ", ".join(str(r["seed"]) for r in held_out)
+        print(f"\nPOOLED HELD-OUT  (seeds {names})")
+        print(f"  rows {p['rows']}, laundering {p['laundering']}, forwarded {p['forwarded']}")
+        print(f"  TP {p['tp']}  FP {p['fp']}  FN {p['fn']}  TN {p['tn']}")
+        print(f"  recall    {recall:.1%}  ({p['tp']}/{p['tp'] + p['fn']}), "
+              f"95% Wilson {r_lo:.1%} to {r_hi:.1%}")
+        print(f"  precision {precision:.1%}  ({p['tp']}/{p['tp'] + p['fp']}), "
+              f"95% Wilson {p_lo:.1%} to {p_hi:.1%}")
+        print(f"  F1        {f1:.2f}")
+        print("  by pattern: " + ", ".join(
+            f"{pat} {c}/{t}" for pat, (t, c) in sorted(p["per_pattern"].items())))
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--ledger", type=Path, default=LABELLED)
     parser.add_argument("--with-llm", action="store_true", help="also run the compliance tier")
@@ -132,7 +250,18 @@ def main() -> int:
              "--min-pattern-recall entirely (repeatable) - for a known, "
              "accepted gap rather than something --min-pattern-recall should fail on",
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--seeds", type=int, nargs="+", metavar="SEED",
+        help=f"generate and score one ledger per seed (development seed {DEV_SEED}, "
+             f"held out: {' '.join(map(str, HELD_OUT_SEEDS))}); prints results, no gate",
+    )
+    args = parser.parse_args(argv)
+
+    if args.seeds:
+        if args.with_llm or args.min_recall is not None or args.min_pattern_recall is not None \
+                or args.gate_exclude:
+            parser.error("--seeds prints results only; it cannot be combined with --with-llm or the gate options")
+        return report_seeds(args.seeds)
 
     if not args.ledger.exists():
         print(f"No labelled ledger at {args.ledger}.")

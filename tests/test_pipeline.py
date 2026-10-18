@@ -288,6 +288,52 @@ def test_evaluate_gate_fails_on_a_dropped_rule_hit():
     assert len(failures) == 1 and "T1" in failures[0]
 
 
+def _evaluate_module():
+    scripts_dir = Path(__file__).resolve().parent.parent / "scripts"
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    import evaluate
+    return evaluate
+
+
+def test_seed_evaluation_is_deterministic():
+    evaluate = _evaluate_module()
+    assert evaluate.evaluate_seed(11) == evaluate.evaluate_seed(11)
+
+
+def test_different_seeds_give_different_ledgers():
+    evaluate = _evaluate_module()
+    assert evaluate.evaluate_seed(11)["rows"] != evaluate.evaluate_seed(13)["rows"] or \
+        evaluate.evaluate_seed(11)["per_pattern"] != evaluate.evaluate_seed(13)["per_pattern"]
+
+
+def test_development_seed_matches_the_file_based_evaluation():
+    evaluate = _evaluate_module()
+    result = evaluate.evaluate_seed(evaluate.DEV_SEED)
+    assert (result["rows"], result["laundering"]) == (465, 45)
+    assert (result["tp"], result["fp"], result["fn"], result["forwarded"]) == (38, 10, 7, 48)
+
+
+@pytest.mark.parametrize("k,n,low,high", [
+    (0, 10, 0.0, 0.2775), (10, 10, 0.7225, 1.0), (38, 45, 0.7122, 0.9225), (0, 0, 0.0, 1.0),
+])
+def test_wilson_interval(k, n, low, high):
+    evaluate = _evaluate_module()
+    lo, hi = evaluate.wilson_interval(k, n)
+    assert lo == pytest.approx(low, abs=1e-4) and hi == pytest.approx(high, abs=1e-4)
+
+
+def test_pooled_counts_are_sums_of_the_seed_counts():
+    evaluate = _evaluate_module()
+    runs = [{"tp": 3, "fp": 1, "fn": 2, "tn": 10, "forwarded": 4, "rows": 16, "laundering": 5,
+             "per_pattern": {"fan_in": (5, 3)}},
+            {"tp": 4, "fp": 0, "fn": 1, "tn": 11, "forwarded": 4, "rows": 16, "laundering": 5,
+             "per_pattern": {"fan_in": (4, 2), "circular": (1, 1)}}]
+    pooled = evaluate.pool(runs)
+    assert (pooled["tp"], pooled["fp"], pooled["fn"], pooled["tn"]) == (7, 1, 3, 21)
+    assert pooled["per_pattern"] == {"fan_in": (9, 5), "circular": (1, 1)}
+
+
 def test_funnel_flag_rate_tracks_the_data():
     """contamination=0.15 flagged exactly 15% regardless of content. It must not."""
     clean = pd.DataFrame([
