@@ -200,6 +200,18 @@ def test_topology_human_review_audit_failure_blocks_the_decision(db, monkeypatch
     assert "human_review" not in _stages(db, SUSPICIOUS_HIGH_SCORE)
 
 
+def test_topology_review_refuses_an_invisible_officer_name(db):
+    at = _run_audit(db)
+    at.selectbox(key="topo_pick").set_value(SUSPICIOUS_HIGH_SCORE).run()
+    _button(at, "Run topology audit").click().run()
+
+    at.text_input(key=f"approver_{SUSPICIOUS_HIGH_SCORE}").input("​‌").run()
+    _button(at, "Approve findings").click().run()
+    assert "Enter the reviewing officer's name" in _texts(at.warning)
+    assert "Execution paused" in _texts(at.error)  # graph did not resume
+    assert "human_review" not in _stages(db, SUSPICIOUS_HIGH_SCORE)
+
+
 def test_sanctions_hit_audit_failure_withholds_the_freeze_directive(db, monkeypatch, tmp_path):
     at = _run_audit(db)
     _fail_stage(monkeypatch, tmp_path, "sanctions_hit")

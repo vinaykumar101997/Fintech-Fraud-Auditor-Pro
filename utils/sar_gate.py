@@ -9,6 +9,7 @@ Pure function over audit events so it is unit-testable without Streamlit.
 
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional
@@ -21,6 +22,18 @@ OFFICER_DECISIONS = ("APPROVE", "REJECT", "ESCALATE")
 
 class OfficerReviewRefused(ValueError):
     """The review request is invalid; nothing was recorded. Message is user-facing."""
+
+
+def is_blank_officer(name: object) -> bool:
+    """True when a name has nothing visible in it.
+
+    Zero-width and other format characters (U+200B, U+200C, U+200D, U+2060,
+    U+FEFF, ...) are removed before the whitespace check, so a name made only
+    of them does not count as a named officer. A visible name that happens to
+    contain one is still accepted, and is stored as entered.
+    """
+    text = "".join(ch for ch in str(name or "") if unicodedata.category(ch) != "Cf")
+    return not text.strip()
 
 
 @dataclass(frozen=True)
@@ -64,7 +77,7 @@ def sar_approval(
             f"SAR drafting for {transaction_id} requires officer approval. "
             f"The latest human review decision is {verdict or 'missing'}.",
         )
-    if not actor:
+    if is_blank_officer(actor):
         return SarGateDecision(
             False,
             f"SAR drafting for {transaction_id} requires officer approval. "
@@ -103,7 +116,7 @@ def record_officer_review(
             f"Officer review applies to SUSPICIOUS rows; {transaction_id} is {row_verdict or 'unassessed'}."
         )
     actor = str(officer or "").strip()
-    if not actor:
+    if is_blank_officer(actor):
         raise OfficerReviewRefused("Enter the reviewing officer's name before deciding.")
     verdict = str(decision or "").strip().upper()
     if verdict not in OFFICER_DECISIONS:
