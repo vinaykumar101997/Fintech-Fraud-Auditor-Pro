@@ -240,7 +240,7 @@ The pytest suite and the evaluation gate catch different problems. The rule test
 
 ## External data: IBM AML transactions
 
-`scripts/eval_external.py` runs Tiers 0 and 1 on the IBM AML transaction files published on Kaggle. **It has not been run on the real files yet; no results are recorded here.** It is tested only on a 20-row hand-made file in the same layout (`tests/fixtures/ibm_aml_sample.csv`).
+`scripts/eval_external.py` runs Tiers 0 and 1 on the IBM AML transaction files published on Kaggle. Its tests use a 20-row hand-made file in the same layout (`tests/fixtures/ibm_aml_sample.csv`). Results on `HI-Small_Trans.csv` are below; the funnel does not transfer to this data.
 
 **The dataset.** [IBM Transactions for Anti Money Laundering (AML)](https://www.kaggle.com/datasets/ealtman2019/ibm-transactions-for-anti-money-laundering-aml), published by Erik Altman. The transactions come from IBM's AMLworld simulator, not from a bank. Six transaction files (`HI-Small_Trans.csv`, `HI-Medium_Trans.csv`, `HI-Large_Trans.csv` and the `LI-` versions) come with a `*_Patterns.txt` file each. HI files have the higher laundering rate, about 0.1% of rows.
 
@@ -264,7 +264,8 @@ The pytest suite and the evaluation gate catch different problems. The rule test
 
 - the forwarded set: TP / FP / FN / TN, recall and precision with Wilson 95% intervals, F1;
 - **PR-AUC** (average precision), for a ranking with every rule-flagged row first and the rest by anomaly score, plus PR-AUC of the anomaly score alone. A random ranking scores the laundering rate, so compare against that rate, not against 0.5;
-- **precision@k** for k = 100, 500, 1000 (`--k` to change).
+- **precision@k** for k = 100, 500, 1000 (`--k` to change);
+- for each rule and for the behaviour model: rows fired, laundering rows fired, precision, and share of the forwarded rows.
 
 A note is printed when fewer than 30 laundering rows are in the sample.
 
@@ -290,11 +291,47 @@ A note is printed when fewer than 30 laundering rows are in the sample.
 
    On 30,000 kept rows of a randomly generated file in this layout, the run took about 8 s on Windows 11.
 
+**Results on `HI-Small_Trans.csv`, measured 2026-10-19.** Rows paid in US Dollar, from the top of the file, with every rule, threshold and model setting as chosen on synthetic seed 7. Nothing was changed after these runs.
+
+| Run (`--max-rows`) | Rows read / kept | Laundering | Forwarded | TP / FP / FN | Recall | Precision | PR-AUC (random ranking) | precision@100 / 500 / 1000 |
+|---|---|---|---|---|---|---|---|---|
+| 50,000 | 50,143 / 50,000 | 2 | 20,480 (41%) | 2 / 20,478 / 0 | 2 of 2 | 0.01% | 0.00854 (0.00004) | 1/100, 2/500, 2/1000 |
+| 500,000 | 1,334,105 / 500,000 | 307 | 185,524 (37%) | 196 / 185,328 / 111 | 63.8% (95% CI 58.3% to 69.0%) | 0.11% | 0.00125 (0.00061) | 0/100, 3/500, 4/1000 |
+
+The 50,000-row run has 2 laundering rows, so its figures are noise.
+
+**The funnel does not transfer to this data.** It forwards 37% of rows, against about 10% on the synthetic ledgers it was built for (51 of 465 rows on seed 7). The forwarded rows are barely richer in laundering than the whole batch: 0.11% against 0.061%. PR-AUC is about twice that of a random ranking, and the 100 highest-ranked rows contain no laundering.
+
+By source, 500,000-row run (a row can fire several):
+
+| Source | Rows fired | Laundering rows | Precision | Share of forwarded rows |
+|---|---|---|---|---|
+| Reporting threshold (10,000 or more) | 130,663 | 122 | 0.093% | 70.4% |
+| Structuring band (8,000 to 10,000) | 10,964 | 23 | 0.210% | 5.9% |
+| High-risk country, secrecy jurisdiction, sanctions name, unidentified parties | 0 each | 0 | | 0% |
+| Any rule | 141,627 | 145 | 0.102% | 76.3% |
+| Behaviour model | 78,873 | 104 | 0.132% | 42.5% |
+| Behaviour model, no rule | 43,897 | 51 | 0.116% | 23.7% |
+| Unresolved-jurisdiction note | 500,000 | 307 | | does not forward a row |
+
+Why it does not transfer:
+
+- **Amount scale is the main cause.** The amount rules forward 141,627 rows, 76% of everything forwarded. Here 26.1% of rows are 10,000 or more (median 1,286; 90th percentile 102,565; 99th percentile 5.47 million), against 1.9% on seed 7 (median 718; 90th percentile 4,547). The reporting-threshold rule fires on 130,663 rows at 0.093% precision, little above the 0.061% laundering rate. The rules also apply to every payment type: only 10,595 of those 130,663 rows are `Cash`. The thresholds don't fit this data's amounts; the file is read correctly.
+- **Self-transfers are forwarded as if they were payments.** 193,337 rows (38.7%) have the same sender and receiver account, 186,391 of them `Reinvestment`. None is laundering. 69,041 of them are forwarded, 37% of all forwarded rows: 65,434 by the amount rules and 12,845 by the behaviour model. The ledger format has no way to mark an account paying itself. Self-transfers do not explain the rate on their own: 38.0% of the other rows are forwarded too.
+- **The behaviour model picks busy accounts, and laundering accounts here are not busy.** It flags 78,873 rows (15.8%; its 30% ceiling is not reached). The senders of flagged rows have a median of 26 transactions in the sample, against 4 for the rest. Senders of laundering rows also have a median of 4. The 100 highest-ranked rows all come from one sender (`070-100428660`), are `Cheque` and `Cash` payments with a median amount of 24.3 million, and include no laundering, hence precision@100 of 0.
+- **Checked, and not a cause:**
+  - **Missing names and countries:** every row gets the unresolved-jurisdiction note, which never forwards a row on its own. The country, sanctions and unidentified-party rules fire on 0 rows, and no account was read as a placeholder.
+  - **Round amounts:** 10 rows are multiples of 1,000.
+  - **Timestamps:** all parse, at minute resolution.
+  - **Account ids:** 172,786 accounts, and no account number appears under two spellings of the same bank code.
+- **The sample is not a clean time window.** The file is not in time order. 499,794 of the 500,000 kept rows are dated 1 and 2 September 2022. The other 206 are dated 3 to 9 September, and 120 of those are laundering, 39% of all laundering in the sample. Laundering chains are only partly present.
+
 **What this cannot show.**
 
 - **Rows come from the top of the file** until `--max-rows` rows are kept. That is the earliest stretch of time, not a random sample, and laundering chains that continue past the cut are only partly present.
-- **Amounts are compared without currency conversion.** The amount rules (the reporting threshold and the structuring band) and the amount features treat every value as the same unit. The US Dollar default keeps that true; with `--currency all` it is not.
-- **No parameter is tuned on this data.** Every threshold comes from the synthetic development seed, so these numbers test how far that tuning carries.
+- **No names or countries.** Sanctions screening and the country rules are not tested by this data.
+- **Amounts are compared without currency conversion.** The amount rules (the reporting threshold and the structuring band) and the amount features treat every value as the same unit. The US Dollar default keeps that true, but it leaves out most of the file: the 500,000 kept rows came from 1,334,105 read. With `--currency all` the amounts are not comparable.
+- **No parameter is tuned on this data.** Every threshold was chosen on synthetic seed 7, so these numbers show how far that tuning carries.
 - **The simulator is not a bank.** The AMLworld laundering patterns differ from the synthetic ledger's, and from real ones.
 - **Tiers 2 and 3 do not run:** no network check, no LLM review.
 
