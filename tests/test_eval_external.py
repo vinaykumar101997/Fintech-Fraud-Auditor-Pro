@@ -140,6 +140,66 @@ def test_end_to_end_on_the_fixture_is_deterministic(monkeypatch):
     assert first["rule_flagged"] >= 3
 
 
+def test_every_rule_reason_maps_to_exactly_one_rule_id():
+    """The breakdown matches reason text, so a reworded reason must fail here
+    rather than be counted under the wrong rule (the structuring-band reason
+    also says "reporting threshold")."""
+    from decimal import Decimal
+
+    from utils.rules import evaluate_row
+
+    cases = {
+        "reporting_threshold": evaluate_row(Decimal("12000"), "Germany", "A", "B"),
+        "structuring_band": evaluate_row(Decimal("9400"), "Germany", "A", "B"),
+        "high_risk_country": evaluate_row(Decimal("50"), "RU", "A", "B"),
+        "secrecy_jurisdiction": evaluate_row(Decimal("50"), "KY", "A", "B"),
+        "sanctions_name": evaluate_row(Decimal("50"), "Germany", "A", "B",
+                                       screener=lambda name: "Listed" if name == "A" else None),
+        "unidentified_parties": evaluate_row(Decimal("50"), "Germany", "Unknown_Entity", "internal_wallet"),
+        "unresolved_jurisdiction": evaluate_row(Decimal("50"), "", "A", "B"),
+    }
+    for rule_id, outcome in cases.items():
+        assert outcome.reasons, rule_id
+        assert [eval_external.rule_id(r) for r in outcome.reasons] == [rule_id], outcome.reasons
+    assert eval_external.rule_id("Something new.") == "other"
+    assert set(eval_external.RULE_REASONS) == set(cases)
+
+
+def test_breakdown_counts_each_rule_and_the_behaviour_model(monkeypatch):
+    monkeypatch.setattr(config, "MIN_ROWS_FOR_ML", 10)
+    result = eval_external.evaluate_external(FIXTURE, max_rows=100, currency="all", ks=[5])
+    rows = {b["source"]: b for b in result["by_source"]}
+    forwarded = result["forwarded"]
+
+    # 14,675.57 and 36,682.97 are over 10,000; the three 9,400-9,500 legs are in the band.
+    assert (rows["reporting_threshold"]["rows"], rows["reporting_threshold"]["laundering"]) == (2, 0)
+    assert (rows["structuring_band"]["rows"], rows["structuring_band"]["laundering"]) == (3, 3)
+    assert rows["structuring_band"]["precision"] == 1.0
+    assert rows["structuring_band"]["share_of_forwarded"] == pytest.approx(3 / forwarded)
+    for rule in ("high_risk_country", "secrecy_jurisdiction", "sanctions_name", "unidentified_parties"):
+        assert rows[rule]["rows"] == 0 and rows[rule]["precision"] is None
+    # Blank countries give every row the note, but a note does not forward a row.
+    assert (rows["unresolved_jurisdiction"]["rows"], rows["unresolved_jurisdiction"]["laundering"]) == (20, 4)
+    assert rows["unresolved_jurisdiction"]["note"]
+
+    assert rows["any rule"]["rows"] == result["rule_flagged"] == 5
+    assert rows["behaviour model"]["rows"] == result["ml_flagged"]
+    assert (rows["behaviour model only"]["rows"]
+            == forwarded - result["rule_flagged"])
+    model = rows["behaviour model"]
+    assert model["share_of_forwarded"] == pytest.approx(model["rows"] / forwarded)
+
+
+def test_main_prints_the_breakdown(monkeypatch, capsys):
+    monkeypatch.setattr(config, "MIN_ROWS_FOR_ML", 10)
+    eval_external.main(["--path", str(FIXTURE), "--max-rows", "100", "--currency", "all", "--k", "5"])
+    out = capsys.readouterr().out
+    assert "by rule and behaviour model" in out
+    lines = {line.split()[0]: line for line in out.splitlines() if line.startswith("  ")}
+    assert lines["structuring_band"].split()[1:3] == ["3", "3"]
+    assert "(note, does not forward)" in lines["unresolved_jurisdiction"]
+
+
 def test_labels_never_reach_the_pipeline(monkeypatch):
     seen = {}
     real = eval_external.apply_rules
