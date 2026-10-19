@@ -23,7 +23,10 @@ Column mapping (the header is checked before anything is read):
     Amount Received, Receiving Currency, Payment Format: not used
 
 Bank codes are kept exactly as written, so "0213" and "00213" are different
-banks. No currency conversion is done: by default only rows paid in US Dollar
+banks. A row whose sender and receiver are the same account is a self-transfer
+(most are "Reinvestment"): the pipeline leaves it out of the amount rules and
+the behaviour model, it is counted separately, and it ranks last for PR-AUC
+and precision@k unless another rule flags it. No currency conversion is done: by default only rows paid in US Dollar
 are kept, because the amount rules and features compare raw amounts. Rows are
 taken from the top of the file until --max-rows rows are kept; the file is not
 in time order, so that sample is not a clean time window. --start and --end
@@ -79,9 +82,10 @@ RULE_REASONS = {
     "sanctions_name": "matches sanctions list entry",
     "unidentified_parties": "Both counterparties are unidentified",
     "unresolved_jurisdiction": "Unresolved jurisdiction",
+    "self_transfer": "Self-transfer: sender and receiver are the same account",
 }
 # Low-severity notes: reported with the reasons but never forward a row.
-NOTES = {"unresolved_jurisdiction"}
+NOTES = {"unresolved_jurisdiction", "self_transfer"}
 
 
 def rule_id(reason: str) -> str:
@@ -266,9 +270,17 @@ def _read_date_range(reader, max_rows: int, currency: str, keep_all: bool,
                  "rows_in_range": in_range, "dates": label}
 
 
+def anomaly_rank(scored: pd.DataFrame) -> pd.Series:
+    """Higher means more anomalous. Rows the model did not score (self-transfers)
+    rank below every scored row."""
+    score = -scored["ml_score"].astype(float)
+    floor = score.min() - 1.0 if score.notna().any() else 0.0
+    return score.fillna(floor)
+
+
 def ranking_score(scored: pd.DataFrame) -> pd.Series:
     """Higher means more suspicious: rule-flagged rows first, then by anomaly score."""
-    return -scored["ml_score"].astype(float) + RULE_RANK_OFFSET * scored["rule_flag"].astype(float)
+    return anomaly_rank(scored) + RULE_RANK_OFFSET * scored["rule_flag"].astype(float)
 
 
 def average_precision(truth: pd.Series, score: pd.Series) -> Optional[float]:
@@ -311,7 +323,7 @@ def evaluate_external(path: Path, max_rows: int, currency: str = "US Dollar",
     if result.ml_applied:
         score = ranking_score(scored)
         pr_auc = average_precision(truth, score)
-        pr_auc_tier0 = average_precision(truth, -scored["ml_score"].astype(float))
+        pr_auc_tier0 = average_precision(truth, anomaly_rank(scored))
         at_k = {k: precision_at_k(truth, score, k) for k in ks}
     else:
         pr_auc = pr_auc_tier0 = None
@@ -332,6 +344,8 @@ def evaluate_external(path: Path, max_rows: int, currency: str = "US Dollar",
         "rule_flagged": result.rule_flagged,
         "ml_flagged": result.ml_flagged,
         "ml_applied": result.ml_applied,
+        "self_transfers": result.self_transfers,
+        "self_transfer_laundering": int(truth[scored["self_transfer"].astype(bool)].sum()),
         **counts,
         "pr_auc": pr_auc,
         "pr_auc_tier0": pr_auc_tier0,
@@ -364,6 +378,8 @@ def report(r: dict) -> None:
     p_lo, p_hi = wilson_interval(tp, tp + fp)
     print(f"\nforwarded {r['forwarded']:,} ({r['rule_flagged']:,} by a rule, "
           f"{r['ml_flagged']:,} by the behaviour model, overlaps counted once)")
+    print(f"  self-transfers {r['self_transfers']:,} not scored "
+          f"({r['self_transfer_laundering']:,} labelled laundering)")
     print(f"  TP {tp:,}  FP {fp:,}  FN {fn:,}  TN {tn:,}")
     print(f"  recall    {r['recall']:.1%}  ({tp}/{tp + fn}), 95% Wilson {r_lo:.1%} to {r_hi:.1%}")
     print(f"  precision {r['precision']:.1%}  ({tp}/{tp + fp}), 95% Wilson {p_lo:.1%} to {p_hi:.1%}")
