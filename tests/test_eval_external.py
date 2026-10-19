@@ -282,6 +282,19 @@ def test_main_prints_the_breakdown(monkeypatch, capsys):
     assert "self-transfers 14 not scored (1 labelled laundering)" in out
 
 
+def test_fixture_with_self_transfer_exclusion_off_matches_the_earlier_results(monkeypatch):
+    """Pinned from the code before self-transfers were excluded."""
+    monkeypatch.setattr(config, "EXCLUDE_SELF_TRANSFERS", False)
+    monkeypatch.setattr(config, "MIN_ROWS_FOR_ML", 10)
+    r = eval_external.evaluate_external(FIXTURE, max_rows=100, currency="all", ks=[5])
+    assert (r["forwarded"], r["rule_flagged"], r["ml_flagged"]) == (8, 5, 6)
+    assert (r["tp"], r["fp"], r["fn"]) == (3, 5, 1)
+    assert r["pr_auc"] == pytest.approx(0.8269230769230769)
+    assert r["pr_auc_tier0"] == pytest.approx(0.8269230769230769)
+    assert r["precision_at"] == {5: pytest.approx(0.6)}
+    assert r["self_transfers"] == 0
+
+
 def test_labels_never_reach_the_pipeline(monkeypatch):
     seen = {}
     real = eval_external.apply_rules

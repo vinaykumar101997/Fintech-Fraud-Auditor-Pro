@@ -56,7 +56,7 @@ def evaluate_row(
     country_code = resolve_country(country)
     # Money an account moves to itself is internal: the amount rules do not
     # apply, but sanctions and jurisdiction checks still do.
-    internal = is_self_transfer(sender, receiver)
+    internal = config.EXCLUDE_SELF_TRANSFERS and is_self_transfer(sender, receiver)
 
     if internal:
         notes.append(
@@ -140,7 +140,8 @@ def apply_rules(df: pd.DataFrame, screener: Screener = _no_screening) -> pd.Data
         flags.append(outcome.force_review)
         reasons.append(outcome.reasons)
         sanctions.append(outcome.sanctions_hits)
-        internal.append(is_self_transfer(row.get("sender", ""), row.get("receiver", "")))
+        internal.append(config.EXCLUDE_SELF_TRANSFERS
+                        and is_self_transfer(row.get("sender", ""), row.get("receiver", "")))
 
     out = df.copy()
     out["rule_flag"] = flags
