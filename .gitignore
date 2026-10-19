@@ -14,6 +14,8 @@ data/*.db
 data/*.pdf
 data/*.csv
 data/*.joblib
+# External datasets (IBM AML from Kaggle); never commit them
+data/external/
 
 # Local Qdrant volume (docker run -v $(pwd)/qdrant_storage:/qdrant/storage)
 qdrant_storage/

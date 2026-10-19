@@ -238,6 +238,66 @@ The build fails if recall on any gated pattern drops below 100%. `circular_camou
 
 The pytest suite and the evaluation gate catch different problems. The rule tests fail when a rule breaks even if the behaviour model happens to compensate. The evaluation gate fails when the behaviour model degrades even if every rule test still passes.
 
+## External data: IBM AML transactions
+
+`scripts/eval_external.py` runs Tiers 0 and 1 on the IBM AML transaction files published on Kaggle. **It has not been run on the real files yet; no results are recorded here.** It is tested only on a 20-row hand-made file in the same layout (`tests/fixtures/ibm_aml_sample.csv`).
+
+**The dataset.** [IBM Transactions for Anti Money Laundering (AML)](https://www.kaggle.com/datasets/ealtman2019/ibm-transactions-for-anti-money-laundering-aml), published by Erik Altman. The transactions come from IBM's AMLworld simulator, not from a bank. Six transaction files (`HI-Small_Trans.csv`, `HI-Medium_Trans.csv`, `HI-Large_Trans.csv` and the `LI-` versions) come with a `*_Patterns.txt` file each. HI files have the higher laundering rate, about 0.1% of rows.
+
+**Licence:** Community Data License Agreement – Sharing – Version 1.0 (CDLA-Sharing-1.0), as listed by Kaggle's dataset API on 2026-10-18. The data is not committed; `data/external/` is in `.gitignore`.
+
+**Column mapping.** The script checks the header first. Case and spacing are ignored, but the 11 columns must be in this order, or it stops and prints the header it found.
+
+| IBM column | Ledger column | Notes |
+|---|---|---|
+| (line number) | `transaction_id` | `L2` is the first data row, so a row can be found in the file |
+| `Timestamp` | `timestamp` | `YYYY/MM/DD HH:MM` |
+| `From Bank`, first `Account` | `sender` | joined as `bank-account`; bank codes kept as written |
+| `To Bank`, second `Account` | `receiver` | the same |
+| `Amount Paid` | `amount` | in `Payment Currency`; no conversion |
+| `Payment Currency` | (filter) | `--currency`, default `US Dollar`; `all` keeps every currency |
+| `Is Laundering` | (label) | never passed to the pipeline |
+| (none) | `country` | blank |
+| `Amount Received`, `Receiving Currency`, `Payment Format` | | not used |
+
+**What is measured.** The files have no party names and no countries, so sanctions screening and the country rules cannot fire. Only the amount rules and the behaviour model run, through the same `load_ledger`, `apply_rules` and `run_funnel` calls as the app. Laundering is rare, so the script prints:
+
+- the forwarded set: TP / FP / FN / TN, recall and precision with Wilson 95% intervals, F1;
+- **PR-AUC** (average precision), for a ranking with every rule-flagged row first and the rest by anomaly score, plus PR-AUC of the anomaly score alone. A random ranking scores the laundering rate, so compare against that rate, not against 0.5;
+- **precision@k** for k = 100, 500, 1000 (`--k` to change).
+
+A note is printed when fewer than 30 laundering rows are in the sample.
+
+**Download and run.**
+
+1. Sign in to Kaggle and open the dataset page above. The licence is shown there.
+2. Download `HI-Small_Trans.csv` from the page's file list into `data/external/`. Or, with the Kaggle command-line tool (not a dependency of this project; it needs a Kaggle API token in `~/.kaggle/kaggle.json`):
+
+   ```bash
+   pip install kaggle
+   kaggle datasets download ealtman2019/ibm-transactions-for-anti-money-laundering-aml -f HI-Small_Trans.csv -p data/external
+   ```
+
+   If a `.zip` arrives, unzip it into `data/external/`.
+3. Look at the header before trusting the mapping: `head -2 data/external/HI-Small_Trans.csv`, or in PowerShell `Get-Content data/external/HI-Small_Trans.csv -TotalCount 2`. It should be `Timestamp,From Bank,Account,To Bank,Account,Amount Received,Receiving Currency,Amount Paid,Payment Currency,Payment Format,Is Laundering`.
+4. Run:
+
+   ```bash
+   python scripts/eval_external.py --path data/external/HI-Small_Trans.csv --max-rows 50000
+   python scripts/eval_external.py --path data/external/HI-Small_Trans.csv --max-rows 500000   # more laundering rows
+   python scripts/eval_external.py --path data/external/HI-Small_Trans.csv --currency all      # every currency, raw amounts
+   ```
+
+   On 30,000 kept rows of a randomly generated file in this layout, the run took about 8 s on Windows 11.
+
+**What this cannot show.**
+
+- **Rows come from the top of the file** until `--max-rows` rows are kept. That is the earliest stretch of time, not a random sample, and laundering chains that continue past the cut are only partly present.
+- **Amounts are compared without currency conversion.** The amount rules (the reporting threshold and the structuring band) and the amount features treat every value as the same unit. The US Dollar default keeps that true; with `--currency all` it is not.
+- **No parameter is tuned on this data.** Every threshold comes from the synthetic development seed, so these numbers test how far that tuning carries.
+- **The simulator is not a bank.** The AMLworld laundering patterns differ from the synthetic ledger's, and from real ones.
+- **Tiers 2 and 3 do not run:** no network check, no LLM review.
+
 ## Limits of this benchmark
 
 The same author wrote the features the model looks at (`utils/features.py`), the rule thresholds (`utils/rules.py`) and the patterns injected into the test data (`scripts/generate_sample_ledger.py`). A 100% recall shows the pipeline catches what it was built to catch, on data shaped by the same assumptions. It is not evidence that it generalises to unseen patterns, adversarial ledgers or real production data. Treat the gated numbers as a guard against reintroducing the original bug, not as a real-world detection rate.
