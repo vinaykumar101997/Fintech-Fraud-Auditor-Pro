@@ -10,6 +10,14 @@ from pathlib import Path
 
 from utils.jurisdictions import parse_jurisdiction_list
 
+
+def env_flag(name: str, default: bool) -> bool:
+    """On/off setting from the environment: 0, false, no or off mean off."""
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
 PROJECT_ROOT = Path(__file__).resolve().parent
 DATA_DIR = PROJECT_ROOT / "data"
 AUDIT_DB_PATH = Path(os.getenv("AUDIT_DB_PATH", DATA_DIR / "audit_log.sqlite3"))
@@ -88,6 +96,11 @@ SECRECY_JURISDICTIONS = parse_jurisdiction_list(
 )
 
 PLACEHOLDER_ENTITIES = {"unknown_entity", "internal_wallet", "", "nan", "none"}
+
+# Money an account sends to itself (sender == receiver) is internal movement:
+# when on, the amount rules and the behavioural model leave it out. Off gives
+# the scoring used before this setting existed.
+EXCLUDE_SELF_TRANSFERS = env_flag("EXCLUDE_SELF_TRANSFERS", True)
 
 # --- Tier 0: statistical funnel ---
 # contamination is deliberately NOT used. A fixed quota flags 15% of a clean

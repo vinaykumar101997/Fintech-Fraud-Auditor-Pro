@@ -1490,6 +1490,43 @@ def test_funnel_accepts_a_ruled_frame_without_the_self_transfer_column():
     assert after.self_transfers == 0
 
 
+def test_self_transfer_exclusion_is_on_by_default():
+    assert config.EXCLUDE_SELF_TRANSFERS is True
+
+
+@pytest.mark.parametrize("raw,expected", [("0", False), ("false", False), ("No", False),
+                                          (" off ", False), ("1", True), ("true", True),
+                                          ("", True), ("yes", True)])
+def test_env_flag_parses_on_and_off(monkeypatch, raw, expected):
+    monkeypatch.setenv("SOME_FLAG", raw)
+    assert config.env_flag("SOME_FLAG", True) is expected
+
+
+def test_env_flag_uses_the_default_when_unset(monkeypatch):
+    monkeypatch.delenv("SOME_FLAG", raising=False)
+    assert config.env_flag("SOME_FLAG", False) is False
+
+
+def test_switching_self_transfer_exclusion_off_gives_the_earlier_results(monkeypatch):
+    """Pinned from the code before self-transfers were excluded, on the same input."""
+    import hashlib
+
+    monkeypatch.setattr(config, "EXCLUDE_SELF_TRANSFERS", False)
+    assert evaluate_row(Decimal("12000"), "Germany", "A-1", "A-1").force_review
+
+    ruled = apply_rules(_with_self_transfers(_loaded_ledger(_generator()(seed=7))))
+    assert not ruled["self_transfer"].any()
+    result = run_funnel(ruled)
+    assert (result.forwarded, result.rule_flagged, result.ml_flagged) == (61, 39, 56)
+    ids = "\n".join(sorted(result.flagged["transaction_id"]))
+    assert hashlib.sha256(ids.encode()).hexdigest() == (
+        "a1ea7d1ccd4419578dfe0df03a366cde8f36d959581a31c7cfc290b447cc61f5")
+    assert result.self_transfers == 0
+    s0 = result.flagged.set_index("transaction_id").loc["S0", "rule_reasons"]
+    assert any("reporting threshold" in r for r in s0)
+    assert not any("Self-transfer" in r for r in s0)
+
+
 if __name__ == "__main__":  # allows running without pytest installed
     import inspect
     passed = failed = 0
