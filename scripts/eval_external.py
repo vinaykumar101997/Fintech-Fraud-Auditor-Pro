@@ -25,8 +25,10 @@ Column mapping (the header is checked before anything is read):
 Bank codes are kept exactly as written, so "0213" and "00213" are different
 banks. No currency conversion is done: by default only rows paid in US Dollar
 are kept, because the amount rules and features compare raw amounts. Rows are
-taken from the top of the file until --max-rows rows are kept, so the sample
-is the earliest part of the file, not a random draw.
+taken from the top of the file until --max-rows rows are kept; the file is not
+in time order, so that sample is not a clean time window. --start and --end
+select rows by their parsed timestamp instead (both days inclusive), sorted by
+time, with --max-rows keeping the earliest.
 """
 
 from __future__ import annotations
@@ -63,6 +65,7 @@ LEDGER_COLUMNS = ["transaction_id", "timestamp", "sender", "receiver", "amount",
 # IsolationForest.decision_function lies in [-0.5, 0.5] with contamination="auto",
 # so adding this to rule-flagged rows ranks every one of them above the rest.
 RULE_RANK_OFFSET = 10.0
+_TIME_FORMAT = "%Y/%m/%d %H:%M"
 MIN_POSITIVES = 30
 DEFAULT_KS = [100, 500, 1000]
 
@@ -134,13 +137,23 @@ def read_header(path: Path) -> List[str]:
         return [cell.strip() for cell in next(csv.reader(fh), [])]
 
 
+def _parse_day(value) -> Optional[pd.Timestamp]:
+    return None if value is None else pd.Timestamp(value).normalize()
+
+
 def read_ibm(path: Path, max_rows: int, currency: str = "US Dollar",
-             chunksize: int = 200_000) -> Tuple[pd.DataFrame, dict]:
+             chunksize: int = 200_000, start=None, end=None) -> Tuple[pd.DataFrame, dict]:
     """Read up to max_rows rows (after the currency filter) in the ledger's columns.
 
+    Without start/end, rows are taken from the top of the file. With either,
+    the whole file is read, rows are kept whose parsed timestamp falls between
+    start and end (both days inclusive), and they are sorted by time, so that
+    a cap keeps the earliest rows by timestamp rather than by file position.
+
     Returns the frame, with `currency` and `is_laundering` beside the ledger
-    columns, and {"rows_read", "currency_counts", "header"}. Raises ValueError
-    if the header is not the IBM layout or no row is paid in `currency`.
+    columns, and {"rows_read", "currency_counts", "header"}, plus
+    "rows_in_range" and "dates" for a date range. Raises ValueError if the
+    header is not the IBM layout or no row matches.
     """
     header = read_header(path)
     if [_norm(c) for c in header] != [_norm(c) for c in IBM_HEADER]:
@@ -148,45 +161,25 @@ def read_ibm(path: Path, max_rows: int, currency: str = "US Dollar",
             "Not the IBM AML transaction layout. Expected: " + ",".join(IBM_HEADER)
             + ". Found: " + ",".join(header)
         )
-
-    keep_all = currency.strip().lower() == "all"
-    parts, kept, rows_read = [], 0, 0
-    counts: Dict[str, int] = {}
     reader = pd.read_csv(path, header=None, skiprows=1, names=_COLUMNS, dtype=str,
                          keep_default_na=False, chunksize=chunksize, encoding="utf-8-sig")
-    for chunk in reader:
-        chunk = chunk.apply(lambda col: col.str.strip())
-        chunk.index = chunk.index + 2  # line number in the file
-        if not keep_all:
-            chunk_counts = chunk["payment_currency"].value_counts()
-            mask = chunk["payment_currency"] == currency
-            if kept + int(mask.sum()) >= max_rows:
-                # Stop at the row that completes max_rows; count only rows read.
-                last = chunk.index[mask][max_rows - kept - 1]
-                chunk = chunk.loc[:last]
-                chunk_counts = chunk["payment_currency"].value_counts()
-            chunk_kept = chunk[chunk["payment_currency"] == currency]
-        else:
-            chunk = chunk.iloc[: max_rows - kept]
-            chunk_counts = chunk["payment_currency"].value_counts()
-            chunk_kept = chunk
-        rows_read += len(chunk)
-        for name, n in chunk_counts.items():
-            counts[name] = counts.get(name, 0) + int(n)
-        parts.append(chunk_kept)
-        kept += len(chunk_kept)
-        if kept >= max_rows:
-            break
+    keep_all = currency.strip().lower() == "all"
+    if start is None and end is None:
+        raw, info = _read_from_top(reader, max_rows, currency, keep_all)
+    else:
+        raw, info = _read_date_range(reader, max_rows, currency, keep_all,
+                                     _parse_day(start), _parse_day(end))
+    info["header"] = header
 
-    raw = pd.concat(parts) if parts else pd.DataFrame(columns=_COLUMNS)
     if raw.empty:
-        found = ", ".join(sorted(counts)) or "none"
+        found = ", ".join(sorted(info["currency_counts"])) or "none"
         raise ValueError(
-            f"No rows paid in {currency!r} among the {rows_read:,} rows read. "
-            f"Currencies found: {found}. Pass --currency with one of them, or all."
+            f"No rows paid in {currency!r} among the {info['rows_read']:,} rows read"
+            + (" in the date range" if "dates" in info else "")
+            + f". Currencies found: {found}. Pass --currency with one of them, or all."
         )
 
-    ts = pd.to_datetime(raw["timestamp"], format="%Y/%m/%d %H:%M", errors="coerce")
+    ts = pd.to_datetime(raw["timestamp"], format=_TIME_FORMAT, errors="coerce")
     frame = pd.DataFrame({
         "transaction_id": ["L" + str(i) for i in raw.index],
         "timestamp": ts.dt.strftime("%Y-%m-%d %H:%M:%S").fillna("").to_numpy(),
@@ -198,7 +191,79 @@ def read_ibm(path: Path, max_rows: int, currency: str = "US Dollar",
         "is_laundering": pd.to_numeric(raw["is_laundering"], errors="coerce").fillna(0)
         .astype(int).to_numpy(),
     })
-    return frame, {"rows_read": rows_read, "currency_counts": counts, "header": header}
+    return frame, info
+
+
+def _chunks(reader):
+    for chunk in reader:
+        chunk = chunk.apply(lambda col: col.str.strip())
+        chunk.index = chunk.index + 2  # line number in the file
+        yield chunk
+
+
+def _add_counts(counts: Dict[str, int], values: pd.Series) -> None:
+    for name, n in values.value_counts().items():
+        counts[name] = counts.get(name, 0) + int(n)
+
+
+def _read_from_top(reader, max_rows: int, currency: str, keep_all: bool):
+    parts, kept, rows_read = [], 0, 0
+    counts: Dict[str, int] = {}
+    for chunk in _chunks(reader):
+        if not keep_all:
+            mask = chunk["payment_currency"] == currency
+            if kept + int(mask.sum()) >= max_rows:
+                # Stop at the row that completes max_rows; count only rows read.
+                last = chunk.index[mask][max_rows - kept - 1]
+                chunk = chunk.loc[:last]
+            chunk_kept = chunk[chunk["payment_currency"] == currency]
+        else:
+            chunk = chunk.iloc[: max_rows - kept]
+            chunk_kept = chunk
+        rows_read += len(chunk)
+        _add_counts(counts, chunk["payment_currency"])
+        parts.append(chunk_kept)
+        kept += len(chunk_kept)
+        if kept >= max_rows:
+            break
+    raw = pd.concat(parts) if parts else pd.DataFrame(columns=_COLUMNS)
+    return raw, {"rows_read": rows_read, "currency_counts": counts}
+
+
+def _read_date_range(reader, max_rows: int, currency: str, keep_all: bool,
+                     start: Optional[pd.Timestamp], end: Optional[pd.Timestamp]):
+    if start is not None and end is not None and start > end:
+        raise ValueError(f"The start date {start.date()} is after the end date {end.date()}.")
+    stop = end + pd.Timedelta(days=1) if end is not None else None
+    parts, rows_read = [], 0
+    counts: Dict[str, int] = {}
+    first = last = None
+    for chunk in _chunks(reader):
+        rows_read += len(chunk)
+        ts = pd.to_datetime(chunk["timestamp"], format=_TIME_FORMAT, errors="coerce")
+        if ts.notna().any():
+            first = min(filter(None, [first, ts.min()]))
+            last = max(filter(None, [last, ts.max()]))
+        in_range = ts.notna()
+        if start is not None:
+            in_range &= ts >= start
+        if stop is not None:
+            in_range &= ts < stop
+        chunk = chunk[in_range].assign(_ts=ts[in_range])
+        _add_counts(counts, chunk["payment_currency"])
+        parts.append(chunk if keep_all else chunk[chunk["payment_currency"] == currency])
+
+    raw = pd.concat(parts) if parts else pd.DataFrame(columns=_COLUMNS + ["_ts"])
+    label = f"{start.date() if start is not None else 'start'} to {end.date() if end is not None else 'end'}"
+    if not counts:
+        span = f"{first:%Y-%m-%d} to {last:%Y-%m-%d}" if first is not None else "none parsed"
+        raise ValueError(f"No rows dated {label}. The file's dates run from {span}.")
+    # Time order, ties in file order, so a cap keeps the earliest rows by timestamp.
+    raw = raw.assign(_line=raw.index).sort_values(["_ts", "_line"], kind="stable")
+    in_range = len(raw)
+    raw = raw.head(max_rows).drop(columns=["_ts", "_line"])
+    return raw, {"rows_read": rows_read, "currency_counts": counts,
+                 "rows_in_range": in_range, "dates": label}
 
 
 def ranking_score(scored: pd.DataFrame) -> pd.Series:
@@ -224,8 +289,8 @@ def precision_at_k(truth: pd.Series, score: pd.Series, k: int) -> Optional[float
 
 
 def evaluate_external(path: Path, max_rows: int, currency: str = "US Dollar",
-                      ks: Iterable[int] = DEFAULT_KS) -> dict:
-    frame, info = read_ibm(path, max_rows, currency)
+                      ks: Iterable[int] = DEFAULT_KS, start=None, end=None) -> dict:
+    frame, info = read_ibm(path, max_rows, currency, start=start, end=end)
 
     limit = config.MAX_LEDGER_ROWS
     config.MAX_LEDGER_ROWS = max(limit, len(frame))
@@ -257,6 +322,8 @@ def evaluate_external(path: Path, max_rows: int, currency: str = "US Dollar",
         "rows_read": info["rows_read"],
         "currency_counts": info["currency_counts"],
         "currency": currency,
+        "dates": info.get("dates"),
+        "rows_in_range": info.get("rows_in_range"),
         "warnings": warnings,
         "rows": len(ledger),
         "laundering": int(truth.sum()),
@@ -280,8 +347,11 @@ def report(r: dict) -> None:
     print("header: " + ",".join(r["header"]))
     shown = ", ".join(f"{name} {n:,}" for name, n in
                       sorted(r["currency_counts"].items(), key=lambda kv: -kv[1])[:6])
+    if r["dates"]:
+        print(f"dates {r['dates']} (parsed timestamps, both days inclusive): "
+              f"{r['rows_in_range']:,} rows in range, earliest {r['rows']:,} kept")
     print(f"rows read {r['rows_read']:,}; kept {r['rows']:,} paid in {r['currency']} "
-          f"(payment currencies read: {shown})")
+          f"(payment currencies {'in range' if r['dates'] else 'read'}: {shown})")
     for warning in r["warnings"]:
         print(f"  warning: {warning}")
     print(f"laundering {r['laundering']:,} of {r['rows']:,} ({r['base_rate']:.3%})")
@@ -330,7 +400,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--path", type=Path, required=True,
                         help="an IBM AML *_Trans.csv file, e.g. data/external/HI-Small_Trans.csv")
     parser.add_argument("--max-rows", type=int, default=50_000,
-                        help="rows to keep, from the top of the file, after the currency filter")
+                        help="rows to keep after the currency filter: from the top of the file, "
+                             "or with --start/--end the earliest by timestamp")
+    parser.add_argument("--start", metavar="YYYY-MM-DD",
+                        help="keep rows dated on or after this day (reads the whole file)")
+    parser.add_argument("--end", metavar="YYYY-MM-DD",
+                        help="keep rows dated on or before this day (reads the whole file)")
     parser.add_argument("--currency", default="US Dollar",
                         help="keep rows with this Payment Currency (default: US Dollar), or all")
     parser.add_argument("--k", type=int, nargs="+", default=DEFAULT_KS, metavar="K",
@@ -344,7 +419,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.max_rows <= 0:
         parser.error("--max-rows must be positive")
     try:
-        result = evaluate_external(args.path, args.max_rows, args.currency, args.k)
+        result = evaluate_external(args.path, args.max_rows, args.currency, args.k,
+                                   start=args.start, end=args.end)
     except ValueError as exc:
         print(exc)
         return 1

@@ -78,6 +78,75 @@ def test_rows_read_stops_at_the_row_that_completes_max_rows():
     assert info["currency_counts"] == {"US Dollar": 6, "Euro": 1}
 
 
+def _multi_day_file(tmp_path):
+    """The fixture with its rows spread over 1 to 4 September, out of time order."""
+    lines = FIXTURE.read_text(encoding="utf-8").splitlines()
+    days = [3, 1, 4, 2, 1, 3, 2, 4, 1, 3, 2, 4, 1, 2, 3, 4, 1, 2, 3, 4]
+    rows = [f"2022/09/0{day} {line[11:16]}{line[16:]}" for day, line in zip(days, lines[1:])]
+    path = tmp_path / "days.csv"
+    path.write_text("\n".join([lines[0]] + rows) + "\n", encoding="utf-8")
+    return path, days
+
+
+def test_date_range_filters_on_the_timestamp_not_on_file_order(tmp_path):
+    path, days = _multi_day_file(tmp_path)
+    frame, info = eval_external.read_ibm(path, max_rows=100, currency="all",
+                                         start="2022-09-02", end="2022-09-03")
+    expected = {f"L{i + 2}" for i, day in enumerate(days) if day in (2, 3)}
+    assert set(frame["transaction_id"]) == expected
+    # --end is inclusive: rows from late on 3 September are kept.
+    assert frame["timestamp"].str[:10].isin(["2022-09-02", "2022-09-03"]).all()
+    assert info["rows_read"] == 20
+    assert info["rows_in_range"] == len(expected)
+
+
+def test_date_range_rows_come_out_in_time_order(tmp_path):
+    path, _ = _multi_day_file(tmp_path)
+    frame, _ = eval_external.read_ibm(path, max_rows=100, currency="all", start="2022-09-01")
+    assert frame["timestamp"].is_monotonic_increasing
+    assert len(frame) == 20
+
+
+def test_date_range_cap_keeps_the_earliest_rows_by_time(tmp_path):
+    path, days = _multi_day_file(tmp_path)
+    frame, info = eval_external.read_ibm(path, max_rows=5, currency="all", start="2022-09-01",
+                                         end="2022-09-04")
+    assert len(frame) == 5 and info["rows_in_range"] == 20
+    assert frame["timestamp"].str[:10].eq("2022-09-01").all()  # 5 rows fall on 1 September
+
+
+def test_date_range_and_currency_filter_combine(tmp_path):
+    path, days = _multi_day_file(tmp_path)
+    frame, info = eval_external.read_ibm(path, max_rows=100, currency="US Dollar",
+                                         start="2022-09-04", end="2022-09-04")
+    assert set(frame["currency"]) == {"US Dollar"}
+    assert frame["timestamp"].str[:10].eq("2022-09-04").all()
+    assert info["currency_counts"] == {"US Dollar": 4, "Yuan": 1}  # counted within the range
+
+
+def test_empty_date_range_names_the_dates_in_the_file(tmp_path):
+    path, _ = _multi_day_file(tmp_path)
+    with pytest.raises(ValueError, match="2022-09-01.*2022-09-04"):
+        eval_external.read_ibm(path, max_rows=100, currency="all", start="2022-10-01")
+
+
+def test_reversed_date_range_is_refused(tmp_path):
+    path, _ = _multi_day_file(tmp_path)
+    with pytest.raises(ValueError, match="after"):
+        eval_external.read_ibm(path, max_rows=100, currency="all", start="2022-09-03",
+                               end="2022-09-02")
+
+
+def test_main_passes_the_date_range_and_prints_it(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(config, "MIN_ROWS_FOR_ML", 3)
+    path, _ = _multi_day_file(tmp_path)
+    code = eval_external.main(["--path", str(path), "--currency", "all", "--k", "2",
+                               "--start", "2022-09-02", "--end", "2022-09-03"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "dates 2022-09-02 to 2022-09-03" in out
+
+
 def test_unknown_currency_names_the_currencies_found():
     with pytest.raises(ValueError, match="Euro, US Dollar, Yuan"):
         eval_external.read_ibm(FIXTURE, max_rows=100, currency="Dollar")
