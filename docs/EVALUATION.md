@@ -326,9 +326,65 @@ Why it does not transfer:
   - **Account ids:** 172,786 accounts, and no account number appears under two spellings of the same bank code.
 - **The sample is not a clean time window.** The file is not in time order. 499,794 of the 500,000 kept rows are dated 1 and 2 September 2022. The other 206 are dated 3 to 9 September, and 120 of those are laundering, 39% of all laundering in the sample. Laundering chains are only partly present.
 
+**Time-split slices.** The 500,000 rows above have been studied in detail, so they are development data. Changes are judged on two date ranges instead, selected with `--start` and `--end` (parsed timestamps, both days inclusive, whole file read):
+
+| Slice | Dates (2022) | USD rows | Laundering | Rows from the 500,000 studied | Self-transfers |
+|---|---|---|---|---|---|
+| TUNE | 3 to 6 September | 513,669 | 666 (0.130%) | 184 | 11,766 (2.3%) |
+| REPORT | 8 to 18 September | 503,288 | 801 (0.159%) | 16 | 11,170 (2.2%) |
+
+- **Choosing parameters:** any parameter is chosen on TUNE only. REPORT is run once, after every change is fixed.
+- **The gap:** 7 September is left out between the slices, so a laundering chain running from one slice into the other is cut in neither.
+- **Why REPORT includes rows already studied:** the file's dates run from 1 to 18 September, but almost every row is dated 1 to 10 September, and every day up to 9 September holds a few of the rows already studied. Starting REPORT on 10 September would remove those 16 rows but leave only 77,833 rows. More than half of the laundering in those rows (423 of them) comes from the thin tail of 11 to 18 September, where 244 of 416 rows are laundering.
+- **Slice size:** both slices are kept whole (`--max-rows 520000`).
+- **Self-transfers:** 1 September, which most of the studied rows come from, is 46% self-transfers. Both slices are about 2%.
+
+Baseline, measured 2026-10-19 with the pipeline unchanged:
+
+| Slice | Forwarded | TP / FP / FN | Recall | Precision | PR-AUC (random ranking) | precision@100 / 500 / 1000 |
+|---|---|---|---|---|---|---|
+| TUNE | 153,107 (29.8%) | 344 / 152,763 / 322 | 51.7% | 0.22% | 0.00258 (0.00130) | 0/100, 0/500, 1/1000 |
+| REPORT | 150,611 (29.9%) | 452 / 150,159 / 349 | 56.4% | 0.30% | 0.00305 (0.00159) | 0/100, 0/500, 1/1000 |
+
+| Source | TUNE rows (laundering) | REPORT rows (laundering) |
+|---|---|---|
+| Reporting threshold | 78,689 (221) | 81,256 (333) |
+| Structuring band | 9,035 (33) | 9,312 (46) |
+| Any rule | 87,724 (254) | 90,568 (379) |
+| Behaviour model | 96,812 (179) | 91,122 (159) |
+| Behaviour model, no rule | 65,383 (90) | 60,043 (73) |
+
+On both slices the funnel forwards about 30% of rows, and PR-AUC is about twice the laundering rate.
+
+```bash
+python scripts/eval_external.py --path data/external/HI-Small_Trans.csv --start 2022-09-03 --end 2022-09-06 --max-rows 520000   # TUNE
+python scripts/eval_external.py --path data/external/HI-Small_Trans.csv --start 2022-09-08 --end 2022-09-18 --max-rows 520000   # REPORT
+```
+
+**Acceptance rule for changes, fixed on 2026-10-19 before any change was measured.**
+
+(a) **On the REPORT slice**, at the funnel's own operating point (the rows it forwards), all three of these must hold:
+- forwarded share of rows at most 15% (baseline 29.9%);
+- recall at least 40% (baseline 56.4%);
+- PR-AUC at least 3 times the laundering rate, 0.00477 (baseline 0.00305).
+
+These three thresholds are a judgment call, not derived from any analysis.
+
+(b) **Synthetic results stay intact.**
+- The CI gate command passes unchanged.
+- Pooled held-out F1 is at least 0.77 on the default ledgers and at least 0.76 on the hard ledgers (baselines 0.79 and 0.78).
+- Seed 7 and the held-out seeds are run once per change set.
+
+(c) **Only three change sets may be tried, and no fourth.** Each one's parameters are fixed in advance or chosen on the TUNE slice only:
+- **A, self-transfers:** an account paying itself is not scored by the rules or the behaviour model, and is counted separately.
+- **B, payment type:** when the ledger carries a payment channel, the reporting-threshold and structuring-band rules apply only to cash-like channels. Ledgers without one behave as before.
+- **C, scale robustness:** stop one very large account from dominating the behaviour model's ranking.
+
+The REPORT slice is run once, after the change sets are fixed. If (a) is not met, the code that helped on TUNE and passes (b) is kept, and the result is recorded as it is.
+
 **What this cannot show.**
 
-- **Rows come from the top of the file** until `--max-rows` rows are kept. That is the earliest stretch of time, not a random sample, and laundering chains that continue past the cut are only partly present.
+- **Without `--start` and `--end`, rows come from the top of the file** until `--max-rows` rows are kept. The file is not in time order, so that is not a clean time window. With a date range, laundering chains that cross the range's edges are only partly present.
 - **No names or countries.** Sanctions screening and the country rules are not tested by this data.
 - **Amounts are compared without currency conversion.** The amount rules (the reporting threshold and the structuring band) and the amount features treat every value as the same unit. The US Dollar default keeps that true, but it leaves out most of the file: the 500,000 kept rows came from 1,334,105 read. With `--currency all` the amounts are not comparable.
 - **No parameter is tuned on this data.** Every threshold was chosen on synthetic seed 7, so these numbers show how far that tuning carries.
