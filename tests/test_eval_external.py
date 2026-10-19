@@ -194,8 +194,15 @@ def test_ranking_puts_rule_flagged_rows_first():
     assert score[0] > score[2]  # lower decision_function = more anomalous
 
 
+def test_rows_without_an_anomaly_score_rank_last_unless_a_rule_flags_them():
+    frame = pd.DataFrame({"ml_score": [0.1, float("nan"), -0.2, float("nan")],
+                          "rule_flag": [False, False, False, True]})
+    score = eval_external.ranking_score(frame)
+    assert list(score.sort_values(ascending=False).index) == [3, 2, 0, 1]
+
+
 def test_end_to_end_on_the_fixture_is_deterministic(monkeypatch):
-    monkeypatch.setattr(config, "MIN_ROWS_FOR_ML", 10)
+    monkeypatch.setattr(config, "MIN_ROWS_FOR_ML", 5)  # 6 rows are not self-transfers
     first = eval_external.evaluate_external(FIXTURE, max_rows=100, currency="all", ks=[5])
     second = eval_external.evaluate_external(FIXTURE, max_rows=100, currency="all", ks=[5])
     assert first == second
@@ -226,6 +233,7 @@ def test_every_rule_reason_maps_to_exactly_one_rule_id():
                                        screener=lambda name: "Listed" if name == "A" else None),
         "unidentified_parties": evaluate_row(Decimal("50"), "Germany", "Unknown_Entity", "internal_wallet"),
         "unresolved_jurisdiction": evaluate_row(Decimal("50"), "", "A", "B"),
+        "self_transfer": evaluate_row(Decimal("50"), "Germany", "A-1", "A-1"),
     }
     for rule_id, outcome in cases.items():
         assert outcome.reasons, rule_id
@@ -235,13 +243,14 @@ def test_every_rule_reason_maps_to_exactly_one_rule_id():
 
 
 def test_breakdown_counts_each_rule_and_the_behaviour_model(monkeypatch):
-    monkeypatch.setattr(config, "MIN_ROWS_FOR_ML", 10)
+    monkeypatch.setattr(config, "MIN_ROWS_FOR_ML", 5)
     result = eval_external.evaluate_external(FIXTURE, max_rows=100, currency="all", ks=[5])
     rows = {b["source"]: b for b in result["by_source"]}
     forwarded = result["forwarded"]
 
-    # 14,675.57 and 36,682.97 are over 10,000; the three 9,400-9,500 legs are in the band.
-    assert (rows["reporting_threshold"]["rows"], rows["reporting_threshold"]["laundering"]) == (2, 0)
+    # 14,675.57 and 36,682.97 are over 10,000 but are self-transfers, so the
+    # threshold does not apply; the three 9,400-9,500 legs are in the band.
+    assert (rows["reporting_threshold"]["rows"], rows["reporting_threshold"]["laundering"]) == (0, 0)
     assert (rows["structuring_band"]["rows"], rows["structuring_band"]["laundering"]) == (3, 3)
     assert rows["structuring_band"]["precision"] == 1.0
     assert rows["structuring_band"]["share_of_forwarded"] == pytest.approx(3 / forwarded)
@@ -250,8 +259,11 @@ def test_breakdown_counts_each_rule_and_the_behaviour_model(monkeypatch):
     # Blank countries give every row the note, but a note does not forward a row.
     assert (rows["unresolved_jurisdiction"]["rows"], rows["unresolved_jurisdiction"]["laundering"]) == (20, 4)
     assert rows["unresolved_jurisdiction"]["note"]
+    # 14 rows pay the sender's own account; one of them (line 21) is labelled laundering.
+    assert (rows["self_transfer"]["rows"], rows["self_transfer"]["laundering"]) == (14, 1)
+    assert rows["self_transfer"]["note"] and result["self_transfers"] == 14
 
-    assert rows["any rule"]["rows"] == result["rule_flagged"] == 5
+    assert rows["any rule"]["rows"] == result["rule_flagged"] == 3
     assert rows["behaviour model"]["rows"] == result["ml_flagged"]
     assert (rows["behaviour model only"]["rows"]
             == forwarded - result["rule_flagged"])
@@ -260,13 +272,14 @@ def test_breakdown_counts_each_rule_and_the_behaviour_model(monkeypatch):
 
 
 def test_main_prints_the_breakdown(monkeypatch, capsys):
-    monkeypatch.setattr(config, "MIN_ROWS_FOR_ML", 10)
+    monkeypatch.setattr(config, "MIN_ROWS_FOR_ML", 5)
     eval_external.main(["--path", str(FIXTURE), "--max-rows", "100", "--currency", "all", "--k", "5"])
     out = capsys.readouterr().out
     assert "by rule and behaviour model" in out
     lines = {line.split()[0]: line for line in out.splitlines() if line.startswith("  ")}
     assert lines["structuring_band"].split()[1:3] == ["3", "3"]
     assert "(note, does not forward)" in lines["unresolved_jurisdiction"]
+    assert "self-transfers 14 not scored (1 labelled laundering)" in out
 
 
 def test_labels_never_reach_the_pipeline(monkeypatch):
@@ -286,11 +299,11 @@ def test_batch_below_the_ml_minimum_reports_no_pr_auc():
     result = eval_external.evaluate_external(FIXTURE, max_rows=100, currency="all", ks=[5])
     assert not result["ml_applied"]
     assert result["pr_auc"] is None and result["pr_auc_tier0"] is None
-    assert result["forwarded"] == 20  # fail-open: every row goes on
+    assert result["forwarded"] == 6  # fail-open for every row except the 14 self-transfers
 
 
 def test_main_prints_the_header_and_the_ranking_metrics(monkeypatch, capsys):
-    monkeypatch.setattr(config, "MIN_ROWS_FOR_ML", 10)
+    monkeypatch.setattr(config, "MIN_ROWS_FOR_ML", 5)
     code = eval_external.main(["--path", str(FIXTURE), "--max-rows", "100", "--currency", "all",
                                "--k", "5", "10"])
     out = capsys.readouterr().out

@@ -37,6 +37,7 @@ class FunnelResult:
     ml_applied: bool
     elapsed_ms: float
     top_features: List[str]
+    self_transfers: int = 0  # rows left out of scoring as internal movement
 
     @property
     def forwarded(self) -> int:
@@ -61,9 +62,17 @@ def run_funnel(df: pd.DataFrame) -> FunnelResult:
     if "rule_flag" not in work.columns:
         raise ValueError("run_funnel requires rule_flag; call apply_rules first.")
 
-    ml_applied = total >= config.MIN_ROWS_FOR_ML
+    # Self-transfers are internal movement: left out of the behaviour model
+    # entirely (features, fit and score), and never forwarded by default.
+    internal = (work["self_transfer"].astype(bool) if "self_transfer" in work.columns
+                else pd.Series(False, index=work.index))
+    scored = work[~internal]
+
+    ml_applied = len(scored) >= config.MIN_ROWS_FOR_ML
+    work["ml_score"] = np.nan
     if ml_applied:
-        features = build_features(work)
+        features = build_features(scored.reset_index(drop=True))
+        features.index = scored.index
         scaled = StandardScaler().fit_transform(features.values)
 
         model = IsolationForest(
@@ -74,15 +83,17 @@ def run_funnel(df: pd.DataFrame) -> FunnelResult:
         )
         model.fit(scaled)
         scores = model.decision_function(scaled)
-        work["ml_score"] = scores
-        work["ml_anomaly"] = _robust_anomaly_mask(scores)
-        top_features = _rank_features(features, work["ml_anomaly"])
+        anomaly = _robust_anomaly_mask(scores)
+        work.loc[scored.index, "ml_score"] = scores
+        work["ml_anomaly"] = False
+        work.loc[scored.index, "ml_anomaly"] = anomaly
+        work["ml_anomaly"] = work["ml_anomaly"].astype(bool)
+        top_features = _rank_features(features, pd.Series(anomaly, index=features.index))
     else:
         # Too few rows for the distribution to mean anything. Fail open into
         # review rather than guessing: everything goes to the next tier.
-        logger.info("Batch of %d is below the ML minimum; skipping Tier 0.", total)
-        work["ml_score"] = np.nan
-        work["ml_anomaly"] = True
+        logger.info("Batch of %d is below the ML minimum; skipping Tier 0.", len(scored))
+        work["ml_anomaly"] = ~internal
         top_features = []
 
     work["investigate"] = work["ml_anomaly"] | work["rule_flag"]
@@ -103,6 +114,7 @@ def run_funnel(df: pd.DataFrame) -> FunnelResult:
             "deterministic rule",
             "batch too small for scoring - forwarded by default",
         )
+    work.loc[internal & ~work["rule_flag"].astype(bool), "selection_reason"] = "self-transfer, not scored"
 
     rescued = int((work["rule_flag"] & ~work["ml_anomaly"]).sum())
     if rescued:
@@ -121,6 +133,7 @@ def run_funnel(df: pd.DataFrame) -> FunnelResult:
         ml_applied=ml_applied,
         elapsed_ms=round((time.perf_counter() - start) * 1000, 2),
         top_features=top_features,
+        self_transfers=int(internal.sum()),
     )
 
 

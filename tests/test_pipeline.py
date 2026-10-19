@@ -1386,6 +1386,110 @@ def test_non_compliance_audit_write_failure_is_logged_not_raised(tmp_path, caplo
     assert "Failed to write audit event" in caplog.text
 
 
+# --- self-transfers ----------------------------------------------------------
+def test_self_transfer_is_not_scored_by_the_amount_rules():
+    for amount in ("12000", "9400"):
+        result = evaluate_row(Decimal(amount), "Germany", "010-8000EBD30", "010-8000EBD30")
+        assert not result.force_review
+        assert not _has(result, "reporting threshold") and not _has(result, "structuring band")
+        assert _has(result, "Self-transfer")
+
+
+def test_self_transfer_is_still_screened_for_sanctions_and_country():
+    hit = evaluate_row(Decimal("12000"), "Germany", "Viktor Bout", "Viktor Bout",
+                       screener=lambda name: "Viktor Bout")
+    assert hit.force_review and _has(hit, "matches sanctions list entry")
+    risky = evaluate_row(Decimal("12000"), "RU", "A-1", "A-1")
+    assert risky.force_review and _has(risky, "high-risk list")
+    assert not _has(risky, "reporting threshold")
+
+
+def test_unidentified_parties_are_not_a_self_transfer():
+    result = evaluate_row(Decimal("12000"), "Germany", "Unknown_Entity", "Unknown_Entity")
+    assert _has(result, "Both counterparties are unidentified")
+    assert _has(result, "reporting threshold")
+    assert not _has(result, "Self-transfer")
+
+
+def test_apply_rules_marks_self_transfers():
+    ledger, _ = load_ledger(_ledger_csv([
+        "T1,12000,Germany,A-1,A-1",
+        "T2,12000,Germany,A-1,B-2",
+        "T3,500,Germany, A-1 ,A-1",
+        "T4,500,Germany,,",
+    ]))
+    ruled = apply_rules(ledger)
+    assert ruled["self_transfer"].tolist() == [True, False, True, False]
+    assert ruled["rule_flag"].tolist() == [False, True, False, True]
+
+
+def test_ledger_without_parties_has_no_self_transfers():
+    ledger, _ = load_ledger(io.StringIO("transaction_id,amount,country\nT1,12000,Germany\nT2,50,USA\n"))
+    assert not apply_rules(ledger)["self_transfer"].any()
+
+
+@pytest.mark.parametrize("hard", [False, True])
+def test_generated_ledgers_have_no_self_transfers(hard):
+    ruled = apply_rules(_loaded_ledger(_generator()(seed=7, hard=hard)))
+    assert not ruled["self_transfer"].any()
+
+
+def _with_self_transfers(ledger, n=12):
+    extra = ledger.head(n).copy()
+    extra["transaction_id"] = [f"S{i}" for i in range(n)]
+    extra["receiver"] = extra["sender"]
+    extra["amount"] = [Decimal("25000000")] * n
+    extra["amount_float"] = 25_000_000.0
+    return pd.concat([ledger, extra], ignore_index=True)
+
+
+def test_self_transfers_do_not_change_how_other_rows_are_scored():
+    ledger = _loaded_ledger(_generator()(seed=7))
+    alone = run_funnel(apply_rules(ledger))
+    mixed = run_funnel(apply_rules(_with_self_transfers(ledger)))
+
+    def by_id(result):
+        rows = pd.concat([result.flagged, result.dropped]).set_index("transaction_id")
+        return rows[["ml_score", "ml_anomaly", "investigate"]]
+
+    expected = by_id(alone)
+    got = by_id(mixed)
+    pd.testing.assert_frame_equal(got.loc[expected.index], expected)
+    selfs = got.loc[[f"S{i}" for i in range(12)]]
+    assert selfs["ml_score"].isna().all()
+    assert not selfs["ml_anomaly"].any() and not selfs["investigate"].any()
+    assert mixed.self_transfers == 12 and alone.self_transfers == 0
+    assert (mixed.forwarded, mixed.ml_flagged, mixed.rule_flagged) == (
+        alone.forwarded, alone.ml_flagged, alone.rule_flagged)
+
+
+def test_small_batch_does_not_forward_self_transfers_by_default():
+    ledger, _ = load_ledger(_ledger_csv(["T1,500,Germany,A-1,B-2", "T2,500,Germany,A-1,A-1"]))
+    result = run_funnel(apply_rules(ledger))
+    assert not result.ml_applied
+    assert result.flagged["transaction_id"].tolist() == ["T1"]
+    dropped = result.dropped.iloc[0]
+    assert dropped["selection_reason"] == "self-transfer, not scored"
+    assert result.self_transfers == 1
+
+
+def test_self_transfers_do_not_count_towards_the_ml_minimum(monkeypatch):
+    monkeypatch.setattr(config, "MIN_ROWS_FOR_ML", 3)
+    rows = [f"T{i},{100 + i},Germany,A-{i},B-{i}" for i in range(2)]
+    rows += [f"S{i},500,Germany,C-{i},C-{i}" for i in range(5)]
+    ledger, _ = load_ledger(_ledger_csv(rows))
+    assert not run_funnel(apply_rules(ledger)).ml_applied
+
+
+def test_funnel_accepts_a_ruled_frame_without_the_self_transfer_column():
+    ledger = _loaded_ledger(_generator()(seed=7))
+    ruled = apply_rules(ledger)
+    before = run_funnel(ruled)
+    after = run_funnel(ruled.drop(columns=["self_transfer"]))
+    assert (before.forwarded, before.ml_flagged) == (after.forwarded, after.ml_flagged)
+    assert after.self_transfers == 0
+
+
 if __name__ == "__main__":  # allows running without pytest installed
     import inspect
     passed = failed = 0

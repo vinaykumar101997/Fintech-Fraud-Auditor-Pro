@@ -27,6 +27,16 @@ def _no_screening(_: str) -> Optional[str]:
     return None
 
 
+def is_self_transfer(sender: object, receiver: object) -> bool:
+    """True when money moves between one account and itself.
+
+    Unidentified parties ("Unknown_Entity" on both sides) are not a
+    self-transfer: two unknowns are not known to be the same account.
+    """
+    s, r = str(sender or "").strip(), str(receiver or "").strip()
+    return bool(s) and s == r and s.lower() not in config.PLACEHOLDER_ENTITIES
+
+
 def evaluate_row(
     amount: Decimal,
     country: str,
@@ -44,14 +54,23 @@ def evaluate_row(
     notes: List[str] = []
     magnitude = abs(amount)
     country_code = resolve_country(country)
+    # Money an account moves to itself is internal: the amount rules do not
+    # apply, but sanctions and jurisdiction checks still do.
+    internal = is_self_transfer(sender, receiver)
 
-    if magnitude >= config.REPORTING_THRESHOLD:
+    if internal:
+        notes.append(
+            "Self-transfer: sender and receiver are the same account, so the amount rules "
+            "and the behavioural model do not score it."
+        )
+
+    if not internal and magnitude >= config.REPORTING_THRESHOLD:
         reasons.append(
             f"Value {magnitude:,.2f} is at or above the {config.REPORTING_THRESHOLD:,.0f} reporting threshold."
         )
 
     # The band the original pipeline threw away.
-    if config.STRUCTURING_FLOOR <= magnitude < config.REPORTING_THRESHOLD:
+    if not internal and config.STRUCTURING_FLOOR <= magnitude < config.REPORTING_THRESHOLD:
         reasons.append(
             f"Value {magnitude:,.2f} sits in the structuring band "
             f"({config.STRUCTURING_FLOOR:,.0f}-{config.REPORTING_THRESHOLD:,.0f}), just below the reporting threshold."
@@ -95,7 +114,7 @@ def evaluate_row(
 
 
 def apply_rules(df: pd.DataFrame, screener: Screener = _no_screening) -> pd.DataFrame:
-    """Add `rule_flag`, `rule_reasons` and `sanctions_hits` columns to the ledger.
+    """Add `rule_flag`, `rule_reasons`, `sanctions_hits` and `self_transfer` columns.
 
     A screener that also has a `screen_many(names)` method is called once with
     every distinct sender and receiver, instead of once per row.
@@ -109,7 +128,7 @@ def apply_rules(df: pd.DataFrame, screener: Screener = _no_screening) -> pd.Data
         found = screen_many(sorted(n for n in names if n))
         screener = found.get
 
-    flags, reasons, sanctions = [], [], []
+    flags, reasons, sanctions, internal = [], [], [], []
     for _, row in df.iterrows():
         outcome = evaluate_row(
             amount=row["amount"],
@@ -121,11 +140,13 @@ def apply_rules(df: pd.DataFrame, screener: Screener = _no_screening) -> pd.Data
         flags.append(outcome.force_review)
         reasons.append(outcome.reasons)
         sanctions.append(outcome.sanctions_hits)
+        internal.append(is_self_transfer(row.get("sender", ""), row.get("receiver", "")))
 
     out = df.copy()
     out["rule_flag"] = flags
     out["rule_reasons"] = reasons
     out["sanctions_hits"] = sanctions
+    out["self_transfer"] = internal
     return out
 
 
