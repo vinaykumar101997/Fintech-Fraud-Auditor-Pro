@@ -1111,13 +1111,15 @@ def _generator():
 
 
 @pytest.mark.parametrize("seed,digest", [
-    (7, "5e63b4638299250cf66e7824523860fda8ddc7562716ea4bfb3e906daba5dcc0"),
-    (11, "fc8886365b1563b1bca88618956be53ca891613b99dfbe97a52bd3d75727d8ff"),
+    (7, "9691bd82b91b5f8853cdd2705eba1028b9f75a750a04885dd3c177d15c1293de"),
+    (11, "791df8fbeb744654415dfa14d2f506f0a0bde7f964f5c123ee439b7841499670"),
 ])
 def test_default_ledger_is_unchanged(seed, digest):
     import hashlib
 
-    text = _generator()(seed=seed).to_csv(index=False)
+    # to_csv ends lines with os.linesep (CRLF on Windows, LF on Linux), so the
+    # text is normalised to LF before hashing to give the same digest everywhere.
+    text = _generator()(seed=seed).to_csv(index=False).replace("\r\n", "\n")
     assert hashlib.sha256(text.encode()).hexdigest() == digest
 
 
