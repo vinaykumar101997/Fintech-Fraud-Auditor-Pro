@@ -66,6 +66,64 @@ RULE_RANK_OFFSET = 10.0
 MIN_POSITIVES = 30
 DEFAULT_KS = [100, 500, 1000]
 
+# Text unique to each reason utils.rules.evaluate_row writes. Matched as a
+# substring; "reporting threshold" alone would also match the structuring band.
+RULE_REASONS = {
+    "reporting_threshold": "is at or above the",
+    "structuring_band": "sits in the structuring band",
+    "high_risk_country": "is on the high-risk list",
+    "secrecy_jurisdiction": "is a recognised secrecy jurisdiction",
+    "sanctions_name": "matches sanctions list entry",
+    "unidentified_parties": "Both counterparties are unidentified",
+    "unresolved_jurisdiction": "Unresolved jurisdiction",
+}
+# Low-severity notes: reported with the reasons but never forward a row.
+NOTES = {"unresolved_jurisdiction"}
+
+
+def rule_id(reason: str) -> str:
+    for rid, text in RULE_REASONS.items():
+        if text in reason:
+            return rid
+    return "other"
+
+
+def _breakdown_row(source: str, fired: pd.Series, truth: pd.Series, investigate: pd.Series,
+                   forwarded: int, note: bool = False) -> dict:
+    rows = int(fired.sum())
+    laundering = int((fired & (truth == 1)).sum())
+    return {
+        "source": source,
+        "rows": rows,
+        "laundering": laundering,
+        "precision": laundering / rows if rows else None,
+        "share_of_forwarded": int((fired & investigate).sum()) / forwarded if forwarded else 0.0,
+        "note": note,
+    }
+
+
+def source_breakdown(scored: pd.DataFrame, truth: pd.Series) -> List[dict]:
+    """Rows fired, laundering rows fired, precision and share of forwarded rows,
+    for each rule (most rows first), any rule, and the behaviour model."""
+    investigate = scored["investigate"].astype(bool)
+    forwarded = int(investigate.sum())
+    ids = scored["rule_reasons"].map(lambda reasons: {rule_id(r) for r in reasons or []})
+    rules = [_breakdown_row(rid, ids.map(lambda s, rid=rid: rid in s), truth, investigate,
+                            forwarded, note=rid in NOTES)
+             for rid in RULE_REASONS]
+    other = ids.map(lambda s: "other" in s)
+    if other.any():
+        rules.append(_breakdown_row("other", other, truth, investigate, forwarded))
+    rules.sort(key=lambda b: -b["rows"])
+
+    rule_flag = scored["rule_flag"].astype(bool)
+    model = scored["ml_anomaly"].astype(bool)
+    return rules + [
+        _breakdown_row("any rule", rule_flag, truth, investigate, forwarded),
+        _breakdown_row("behaviour model", model, truth, investigate, forwarded),
+        _breakdown_row("behaviour model only", model & ~rule_flag, truth, investigate, forwarded),
+    ]
+
 
 def _norm(cell: str) -> str:
     return " ".join(cell.split()).lower()
@@ -179,14 +237,13 @@ def evaluate_external(path: Path, max_rows: int, currency: str = "US Dollar",
     # No screener: the accounts carry no names to screen.
     result = run_funnel(apply_rules(ledger))
     scored = (pd.concat([result.flagged, result.dropped])
-              .set_index("transaction_id").loc[ledger["transaction_id"]])
+              .set_index("transaction_id").loc[ledger["transaction_id"]].reset_index(drop=True))
     labels = frame.set_index("transaction_id")["is_laundering"]
     truth = labels.loc[ledger["transaction_id"]].reset_index(drop=True)
-    predicted = scored["investigate"].astype(bool).reset_index(drop=True)
+    predicted = scored["investigate"].astype(bool)
     counts = metrics(truth, predicted)
 
     if result.ml_applied:
-        scored = scored.reset_index(drop=True)
         score = ranking_score(scored)
         pr_auc = average_precision(truth, score)
         pr_auc_tier0 = average_precision(truth, -scored["ml_score"].astype(float))
@@ -212,6 +269,7 @@ def evaluate_external(path: Path, max_rows: int, currency: str = "US Dollar",
         "pr_auc": pr_auc,
         "pr_auc_tier0": pr_auc_tier0,
         "precision_at": at_k,
+        "by_source": source_breakdown(scored, truth),
     }
 
 
@@ -241,16 +299,25 @@ def report(r: dict) -> None:
     print(f"  precision {r['precision']:.1%}  ({tp}/{tp + fp}), 95% Wilson {p_lo:.1%} to {p_hi:.1%}")
     print(f"  F1        {r['f1']:.3f}")
 
+    print("\nby rule and behaviour model (a row can fire several)")
+    print(f"  {'source':<26}{'rows':>9}{'laund.':>8}{'precision':>11}{'of forwarded':>14}")
+    for b in r["by_source"]:
+        precision = f"{b['precision']:.3%}" if b["precision"] is not None else "-"
+        share = "(note, does not forward)" if b["note"] else f"{b['share_of_forwarded']:.1%}"
+        print(f"  {b['source']:<26}{b['rows']:>9,}{b['laundering']:>8,}{precision:>11}  {share:>12}")
+    if not r["ml_applied"]:
+        print("  (behaviour model: did not run; every row forwarded by default)")
+
     if not r["ml_applied"]:
         print(f"\nThe batch is below MIN_ROWS_FOR_ML ({config.MIN_ROWS_FOR_ML}), so Tier 0 did "
               "not run and there is no score to rank by: no PR-AUC or precision@k.")
         return
     print("\nranking: rule-flagged rows first, then by anomaly score")
-    print(f"  PR-AUC (average precision), Tiers 0+1  {r['pr_auc']:.4f}" if r["pr_auc"] is not None
+    print(f"  PR-AUC (average precision), Tiers 0+1  {r['pr_auc']:.5f}" if r["pr_auc"] is not None
           else "  PR-AUC: no laundering rows")
     if r["pr_auc_tier0"] is not None:
-        print(f"  PR-AUC, anomaly score alone          {r['pr_auc_tier0']:.4f}")
-    print(f"  PR-AUC of a random ranking           {r['base_rate']:.4f}  (the laundering rate)")
+        print(f"  PR-AUC, anomaly score alone          {r['pr_auc_tier0']:.5f}")
+    print(f"  PR-AUC of a random ranking           {r['base_rate']:.5f}  (the laundering rate)")
     for k, value in r["precision_at"].items():
         if value is None:
             print(f"  precision@{k:<6} n/a (fewer than {k} rows)")
