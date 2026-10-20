@@ -291,7 +291,7 @@ A note is printed when fewer than 30 laundering rows are in the sample.
 
    On 30,000 kept rows of a randomly generated file in this layout, the run took about 8 s on Windows 11.
 
-**Results on `HI-Small_Trans.csv`, measured 2026-10-19.** Rows paid in US Dollar, from the top of the file, with every rule, threshold and model setting as chosen on synthetic seed 7. Nothing was changed after these runs.
+**Results on `HI-Small_Trans.csv`, measured 2026-10-19.** Rows paid in US Dollar, from the top of the file, with every rule, threshold and model setting as chosen on synthetic seed 7. These runs came before the changes described under "Time-split slices" below.
 
 | Run (`--max-rows`) | Rows read / kept | Laundering | Forwarded | TP / FP / FN | Recall | Precision | PR-AUC (random ranking) | precision@100 / 500 / 1000 |
 |---|---|---|---|---|---|---|---|---|
@@ -394,6 +394,44 @@ An amount-rank feature (each amount's percentile rank within the batch) was also
 | off | on | 0.00201 (0.00179 to 0.00215) |
 
 B on is worse on every seed. A on and off are within noise. The setting kept is A on, B off, with `FEATURE_Z_CLIP = 5`.
+
+**What each change did on TUNE** (Isolation Forest seed 42; each row adds to the one above, except B, which was measured with A and then turned off):
+
+| Setting | Forwarded | TP / FP / FN | Recall | PR-AUC (random 0.00130) |
+|---|---|---|---|---|
+| Baseline | 153,107 (29.8%) | 344 / 152,763 / 322 | 51.7% | 0.00258 |
+| A: self-transfers left out | 146,898 (28.6%) | 330 / 146,568 / 336 | 49.5% | 0.00242 |
+| A + B: amount rules on cash only (not kept) | 101,783 (19.8%) | 151 / 101,632 / 515 | 22.7% | 0.00181 |
+| A + C: robust z-scores clipped at 5 (kept) | 86,186 (16.8%) | 261 / 85,925 / 405 | 39.2% | 0.00271 |
+
+- **A** leaves out 11,766 self-transfers on TUNE (2.3% of rows), none of them laundering. It mattered on the development rows, where 38.7% of rows are self-transfers and forwarding fell from 37.1% to 21.4%, but barely on TUNE or REPORT.
+- **B** removes most of the amount rules' laundering hits. Of the rows 10,000 or more paid in Cash, 0.026% are laundering, below the 0.130% laundering rate. The non-cash rows that B stops ruling hold 251 laundering rows at 0.35%. In this simulator laundering moves mostly by ACH, so the amount rules work here as large-amount rules, not as cash rules. `CASH_ONLY_AMOUNT_RULES` stays off.
+- **C** stops one very large account from stretching each feature's range. The behaviour model forwards 11,000 rows instead of 94,943, and finds 37 laundering rows instead of 151; PR-AUC rises about 6% (mean over five seeds 0.00262 against 0.00248).
+- **On the synthetic ledgers only C changes anything.** Seed 7 goes from 84% / 75% / 0.79 with 51 rows forwarded to 84% / 78% / 0.81 with 49. Pooled held-out F1 falls from 0.79 to 0.77 on the default ledgers (TP / FP / FN 196 / 69 / 34 to 186 / 65 / 44) and from 0.78 to 0.76 on the hard ledgers (307 / 104 / 68 to 274 / 69 / 101). Both are just above the limits of rule (b). Hard `fan_in` falls from 33 to 9 of 55, and `circular_small` from 37 to 27 of 46.
+
+**Result on the REPORT slice, run once on 2026-10-20 with the kept setting.** Rule (a) is not met.
+
+| REPORT slice | Baseline | Kept setting | Rule (a) |
+|---|---|---|---|
+| Forwarded | 150,611 (29.9%) | 98,178 (19.5%) | at most 15%: **not met** |
+| TP / FP / FN | 452 / 150,159 / 349 | 404 / 97,774 / 397 | |
+| Recall | 56.4% | 50.4% (95% CI 47.0% to 53.9%) | at least 40%: met |
+| Precision | 0.30% | 0.41% | |
+| PR-AUC (random 0.00159) | 0.00305 | 0.00348 | at least 0.00477: **not met** |
+| precision@100 / 500 / 1000 | 0/100, 0/500, 1/1000 | 0/100, 0/500, 1/1000 | |
+
+By source on REPORT: the reporting threshold fires on 77,730 rows (333 laundering, 0.43%), the structuring band on 8,993 (46, 0.51%), any rule on 86,723 (379), the behaviour model on 21,268 (64, 0.30%), and the behaviour model without a rule on 11,455 (25). 11,170 self-transfers were left out, none laundering.
+
+The changes forward a third fewer rows (98,178 against 150,611), lose 48 laundering rows, and raise PR-AUC from 1.9 to 2.2 times a random ranking. The funnel still does not transfer to this data.
+
+**What still does not work.**
+
+- **The amount rules alone forward 17.2% of REPORT rows** (86,723), so no change to the behaviour model can bring the total under 15%. The reporting-threshold rule is the larger part, at 0.43% precision. Restricting it to cash (B) removes most of the laundering it catches.
+- **The ranking has no useful top.** The 100 and 500 highest-ranked rows hold no laundering. Rule-flagged rows rank first and are ordered by anomaly score; on TUNE the top 100 all came from one sender in every setting tried.
+- **The behaviour model is weak here.** On its own it finds 64 of 801 laundering rows in 21,268 forwarded, 0.30% precision against a 0.159% laundering rate.
+- **C costs synthetic recall**, as above, for a small gain on this data.
+- **The caveats above still apply:** US Dollar rows only, no names or countries, chains cut at the slice edges, and every threshold except the clip chosen on synthetic seed 7. The clip was chosen on TUNE.
+
 
 **What this cannot show.**
 
