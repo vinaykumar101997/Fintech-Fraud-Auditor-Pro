@@ -11,6 +11,7 @@ row that carries it.
 
 from __future__ import annotations
 
+import math
 from decimal import Decimal
 from typing import Callable, List, Optional
 
@@ -37,17 +38,31 @@ def is_self_transfer(sender: object, receiver: object) -> bool:
     return bool(s) and s == r and s.lower() not in config.PLACEHOLDER_ENTITIES
 
 
+def _channel_text(channel: object) -> Optional[str]:
+    """The channel as written, or None when there is none (no column, or blank)."""
+    if channel is None or (isinstance(channel, float) and math.isnan(channel)):
+        return None
+    text = str(channel).strip()
+    return text or None
+
+
 def evaluate_row(
     amount: Decimal,
     country: str,
     sender: str = "",
     receiver: str = "",
     screener: Screener = _no_screening,
+    channel: object = None,
 ) -> RuleResult:
     """Apply every deterministic rule to a single transaction.
 
     Notes (low severity) are reported alongside the reasons but do not flag
     the row on their own.
+
+    `channel` is the payment channel when the ledger has one. With
+    config.CASH_ONLY_AMOUNT_RULES on, a known non-cash channel switches off the
+    reporting-threshold and structuring-band rules, which cover cash; None or a
+    blank value leaves them on. With it off, the channel is ignored.
     """
     result = RuleResult()
     reasons: List[str] = []
@@ -64,16 +79,29 @@ def evaluate_row(
             "and the behavioural model do not score it."
         )
 
-    if not internal and magnitude >= config.REPORTING_THRESHOLD:
+    channel_name = _channel_text(channel) if config.CASH_ONLY_AMOUNT_RULES else None
+    cash = channel_name is None or channel_name.lower() in config.CASH_CHANNELS
+    amount_rules = not internal and cash
+    via = f" Channel '{channel_name}' is a cash channel." if channel_name else ""
+
+    if amount_rules and magnitude >= config.REPORTING_THRESHOLD:
         reasons.append(
             f"Value {magnitude:,.2f} is at or above the {config.REPORTING_THRESHOLD:,.0f} reporting threshold."
+            + via
         )
 
     # The band the original pipeline threw away.
-    if not internal and config.STRUCTURING_FLOOR <= magnitude < config.REPORTING_THRESHOLD:
+    if amount_rules and config.STRUCTURING_FLOOR <= magnitude < config.REPORTING_THRESHOLD:
         reasons.append(
             f"Value {magnitude:,.2f} sits in the structuring band "
             f"({config.STRUCTURING_FLOOR:,.0f}-{config.REPORTING_THRESHOLD:,.0f}), just below the reporting threshold."
+            + via
+        )
+
+    if not internal and not cash and magnitude >= config.STRUCTURING_FLOOR:
+        notes.append(
+            f"Channel '{channel_name}' is not a cash channel, so the reporting-threshold and "
+            f"structuring-band rules, which cover cash, were not applied to {magnitude:,.2f}."
         )
 
     if country_code is None:
@@ -129,6 +157,7 @@ def apply_rules(df: pd.DataFrame, screener: Screener = _no_screening) -> pd.Data
         screener = found.get
 
     flags, reasons, sanctions, internal = [], [], [], []
+    has_channel = "channel" in df.columns
     for _, row in df.iterrows():
         outcome = evaluate_row(
             amount=row["amount"],
@@ -136,6 +165,7 @@ def apply_rules(df: pd.DataFrame, screener: Screener = _no_screening) -> pd.Data
             sender=str(row.get("sender", "")),
             receiver=str(row.get("receiver", "")),
             screener=screener,
+            channel=row.get("channel") if has_channel else None,
         )
         flags.append(outcome.force_review)
         reasons.append(outcome.reasons)

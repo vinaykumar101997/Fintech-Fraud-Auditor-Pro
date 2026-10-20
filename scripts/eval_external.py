@@ -18,9 +18,10 @@ Column mapping (the header is checked before anything is read):
     To Bank + "-" + Account         receiver   (second "Account" column)
     Amount Paid                     amount     (in Payment Currency)
     Payment Currency                used only by --currency
+    Payment Format                  channel    (amount rules apply only to Cash)
     Is Laundering                   label, kept away from the pipeline
     (none)                          country    (left blank)
-    Amount Received, Receiving Currency, Payment Format: not used
+    Amount Received, Receiving Currency: not used
 
 Bank codes are kept exactly as written, so "0213" and "00213" are different
 banks. A row whose sender and receiver are the same account is a self-transfer
@@ -63,7 +64,7 @@ _COLUMNS = [
     "timestamp", "from_bank", "from_account", "to_bank", "to_account", "amount_received",
     "receiving_currency", "amount_paid", "payment_currency", "payment_format", "is_laundering",
 ]
-LEDGER_COLUMNS = ["transaction_id", "timestamp", "sender", "receiver", "amount", "country"]
+LEDGER_COLUMNS = ["transaction_id", "timestamp", "sender", "receiver", "amount", "country", "channel"]
 
 # IsolationForest.decision_function lies in [-0.5, 0.5] with contamination="auto",
 # so adding this to rule-flagged rows ranks every one of them above the rest.
@@ -83,9 +84,10 @@ RULE_REASONS = {
     "unidentified_parties": "Both counterparties are unidentified",
     "unresolved_jurisdiction": "Unresolved jurisdiction",
     "self_transfer": "Self-transfer: sender and receiver are the same account",
+    "non_cash_channel": "is not a cash channel",
 }
 # Low-severity notes: reported with the reasons but never forward a row.
-NOTES = {"unresolved_jurisdiction", "self_transfer"}
+NOTES = {"unresolved_jurisdiction", "self_transfer", "non_cash_channel"}
 
 
 def rule_id(reason: str) -> str:
@@ -191,6 +193,7 @@ def read_ibm(path: Path, max_rows: int, currency: str = "US Dollar",
         "receiver": (raw["to_bank"] + "-" + raw["to_account"]).to_numpy(),
         "amount": raw["amount_paid"].to_numpy(),
         "country": "",
+        "channel": raw["payment_format"].to_numpy(),
         "currency": raw["payment_currency"].to_numpy(),
         "is_laundering": pd.to_numeric(raw["is_laundering"], errors="coerce").fillna(0)
         .astype(int).to_numpy(),
