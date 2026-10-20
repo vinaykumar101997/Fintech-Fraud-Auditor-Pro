@@ -382,6 +382,8 @@ These three thresholds are a judgment call, not derived from any analysis.
 
 The REPORT slice is run once, after the change sets are fixed. If (a) is not met, the code that helped on TUNE and passes (b) is kept, and the result is recorded as it is.
 
+An amount-rank feature (each amount's percentile rank within the batch) was also tried as part of C; it lowered TUNE PR-AUC at every clipping bound except 3, so it was removed.
+
 **What this cannot show.**
 
 - **Without `--start` and `--end`, rows come from the top of the file** until `--max-rows` rows are kept. The file is not in time order, so that is not a clean time window. With a date range, laundering chains that cross the range's edges are only partly present.

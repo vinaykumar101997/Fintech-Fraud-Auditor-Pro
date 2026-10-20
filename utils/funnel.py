@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 import pandas as pd
@@ -73,7 +73,10 @@ def run_funnel(df: pd.DataFrame) -> FunnelResult:
     if ml_applied:
         features = build_features(scored.reset_index(drop=True))
         features.index = scored.index
-        scaled = StandardScaler().fit_transform(features.values)
+        if config.FEATURE_Z_CLIP > 0:
+            scaled = robust_scale(features.values, config.FEATURE_Z_CLIP)
+        else:
+            scaled = StandardScaler().fit_transform(features.values)
 
         model = IsolationForest(
             n_estimators=200,
@@ -135,6 +138,23 @@ def run_funnel(df: pd.DataFrame) -> FunnelResult:
         top_features=top_features,
         self_transfers=int(internal.sum()),
     )
+
+
+def robust_scale(values: np.ndarray, bound: Optional[float]) -> np.ndarray:
+    """Per-column robust z-score, (x - median) / scale, clipped at +/- bound.
+
+    scale is 1.4826 * MAD. Where the MAD is zero (a mostly-constant column) it
+    falls back to 1.2533 * the mean absolute deviation from the median; a
+    constant column becomes all zeros. bound=None leaves the scores unclipped.
+    """
+    median = np.median(values, axis=0)
+    deviation = np.abs(values - median)
+    scale = 1.4826 * np.median(deviation, axis=0)
+    fallback = 1.2533 * deviation.mean(axis=0)
+    scale = np.where(scale > 0, scale, fallback)
+    z = np.divide(values - median, scale, out=np.zeros_like(values, dtype=float),
+                  where=scale > 0)
+    return z if bound is None else np.clip(z, -bound, bound)
 
 
 def _robust_anomaly_mask(scores: np.ndarray) -> np.ndarray:

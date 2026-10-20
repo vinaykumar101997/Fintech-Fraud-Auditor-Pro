@@ -127,6 +127,14 @@ ANOMALY_Z_THRESHOLD = float(os.getenv("ANOMALY_Z_THRESHOLD", "2.5"))
 # Ceiling only, never a target. Protects the LLM budget if a batch is pathological.
 MAX_ML_FLAG_RATE = float(os.getenv("MAX_ML_FLAG_RATE", "0.30"))
 MIN_ROWS_FOR_ML = int(os.getenv("MIN_ROWS_FOR_ML", "25"))
+
+# Feature scaling for the behavioural model. Isolation Forest splits uniformly
+# between a feature's minimum and maximum, so one account with extreme counts
+# stretches that range and takes most of the splits. FEATURE_Z_CLIP > 0 scales
+# each feature to a robust z-score (median and MAD) clipped at +/- that bound;
+# 0 keeps the earlier StandardScaler. 5 was chosen on the IBM AML tuning slice
+# (3 to 6 September) from 3, 5, 10 and no clip; see docs/EVALUATION.md.
+FEATURE_Z_CLIP = float(os.getenv("FEATURE_Z_CLIP", "5"))
 ML_RANDOM_STATE = 42
 
 # Pass-through features (utils/features.py): an outgoing payment counts as

@@ -289,6 +289,7 @@ def test_main_prints_the_breakdown(monkeypatch, capsys):
 def test_fixture_with_self_transfer_exclusion_off_matches_the_earlier_results(monkeypatch):
     """Pinned from the code before self-transfers were excluded."""
     monkeypatch.setattr(config, "EXCLUDE_SELF_TRANSFERS", False)
+    monkeypatch.setattr(config, "FEATURE_Z_CLIP", 0.0)  # that code used StandardScaler
     monkeypatch.setattr(config, "MIN_ROWS_FOR_ML", 10)
     # That code had no channel column; without one the rules behave as before.
     monkeypatch.setattr(eval_external, "LEDGER_COLUMNS",
@@ -316,6 +317,7 @@ def test_breakdown_with_cash_only_amount_rules(monkeypatch):
 
 def test_fixture_with_cash_only_rules_off_matches_the_earlier_results(monkeypatch):
     """Pinned from the code before the channel existed, on the same fixture."""
+    monkeypatch.setattr(config, "FEATURE_Z_CLIP", 0.0)  # that code used StandardScaler
     monkeypatch.setattr(config, "MIN_ROWS_FOR_ML", 5)
     r = eval_external.evaluate_external(FIXTURE, max_rows=100, currency="all", ks=[5])
     assert (r["forwarded"], r["rule_flagged"], r["ml_flagged"], r["self_transfers"]) == (3, 3, 0, 14)
