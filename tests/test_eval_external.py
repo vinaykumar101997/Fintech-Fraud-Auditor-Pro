@@ -36,9 +36,10 @@ def test_ibm_columns_map_onto_the_ledger_columns():
     assert first["receiver"] == "010-8000EBD30"
     assert first["amount"] == "3697.34"
     assert first["country"] == ""
+    assert first["channel"] == "Reinvestment"  # Payment Format, carried as the channel
     # Amount Paid in the Payment Currency, not Amount Received.
     wire = frame[frame["transaction_id"] == "L19"].iloc[0]
-    assert (wire["amount"], wire["currency"]) == ("1012.50", "US Dollar")
+    assert (wire["amount"], wire["currency"], wire["channel"]) == ("1012.50", "US Dollar", "Wire")
     assert frame["is_laundering"].tolist().count(1) == 4
 
 
@@ -213,10 +214,10 @@ def test_end_to_end_on_the_fixture_is_deterministic(monkeypatch):
     assert 0.0 <= first["pr_auc"] <= 1.0 and 0.0 <= first["pr_auc_tier0"] <= 1.0
     assert first["base_rate"] == pytest.approx(0.2)
     # The 9,400 to 9,500 USD legs sit in the structuring band, so the rules flag them.
-    assert first["rule_flagged"] >= 3
+    assert first["rule_flagged"] == 3
 
 
-def test_every_rule_reason_maps_to_exactly_one_rule_id():
+def test_every_rule_reason_maps_to_exactly_one_rule_id(monkeypatch):
     """The breakdown matches reason text, so a reworded reason must fail here
     rather than be counted under the wrong rule (the structuring-band reason
     also says "reporting threshold")."""
@@ -224,6 +225,7 @@ def test_every_rule_reason_maps_to_exactly_one_rule_id():
 
     from utils.rules import evaluate_row
 
+    monkeypatch.setattr(config, "CASH_ONLY_AMOUNT_RULES", True)  # for the non-cash note
     cases = {
         "reporting_threshold": evaluate_row(Decimal("12000"), "Germany", "A", "B"),
         "structuring_band": evaluate_row(Decimal("9400"), "Germany", "A", "B"),
@@ -233,6 +235,7 @@ def test_every_rule_reason_maps_to_exactly_one_rule_id():
                                        screener=lambda name: "Listed" if name == "A" else None),
         "unidentified_parties": evaluate_row(Decimal("50"), "Germany", "Unknown_Entity", "internal_wallet"),
         "unresolved_jurisdiction": evaluate_row(Decimal("50"), "", "A", "B"),
+        "non_cash_channel": evaluate_row(Decimal("12000"), "Germany", "A", "B", channel="Wire"),
         "self_transfer": evaluate_row(Decimal("50"), "Germany", "A-1", "A-1"),
     }
     for rule_id, outcome in cases.items():
@@ -254,6 +257,7 @@ def test_breakdown_counts_each_rule_and_the_behaviour_model(monkeypatch):
     assert (rows["structuring_band"]["rows"], rows["structuring_band"]["laundering"]) == (3, 3)
     assert rows["structuring_band"]["precision"] == 1.0
     assert rows["structuring_band"]["share_of_forwarded"] == pytest.approx(3 / forwarded)
+    assert rows["non_cash_channel"]["rows"] == 0  # the channel is ignored by default
     for rule in ("high_risk_country", "secrecy_jurisdiction", "sanctions_name", "unidentified_parties"):
         assert rows[rule]["rows"] == 0 and rows[rule]["precision"] is None
     # Blank countries give every row the note, but a note does not forward a row.
@@ -286,6 +290,9 @@ def test_fixture_with_self_transfer_exclusion_off_matches_the_earlier_results(mo
     """Pinned from the code before self-transfers were excluded."""
     monkeypatch.setattr(config, "EXCLUDE_SELF_TRANSFERS", False)
     monkeypatch.setattr(config, "MIN_ROWS_FOR_ML", 10)
+    # That code had no channel column; without one the rules behave as before.
+    monkeypatch.setattr(eval_external, "LEDGER_COLUMNS",
+                        [c for c in eval_external.LEDGER_COLUMNS if c != "channel"])
     r = eval_external.evaluate_external(FIXTURE, max_rows=100, currency="all", ks=[5])
     assert (r["forwarded"], r["rule_flagged"], r["ml_flagged"]) == (8, 5, 6)
     assert (r["tp"], r["fp"], r["fn"]) == (3, 5, 1)
@@ -293,6 +300,29 @@ def test_fixture_with_self_transfer_exclusion_off_matches_the_earlier_results(mo
     assert r["pr_auc_tier0"] == pytest.approx(0.8269230769230769)
     assert r["precision_at"] == {5: pytest.approx(0.6)}
     assert r["self_transfers"] == 0
+
+
+def test_breakdown_with_cash_only_amount_rules(monkeypatch):
+    monkeypatch.setattr(config, "CASH_ONLY_AMOUNT_RULES", True)
+    monkeypatch.setattr(config, "MIN_ROWS_FOR_ML", 5)
+    result = eval_external.evaluate_external(FIXTURE, max_rows=100, currency="all", ks=[5])
+    rows = {b["source"]: b for b in result["by_source"]}
+    # Only the Cash leg (line 14) is ruled; the two ACH legs get the non-cash note.
+    assert (rows["structuring_band"]["rows"], rows["structuring_band"]["laundering"]) == (1, 1)
+    assert (rows["non_cash_channel"]["rows"], rows["non_cash_channel"]["laundering"]) == (2, 2)
+    assert rows["non_cash_channel"]["note"]
+    assert rows["any rule"]["rows"] == result["rule_flagged"] == 1
+
+
+def test_fixture_with_cash_only_rules_off_matches_the_earlier_results(monkeypatch):
+    """Pinned from the code before the channel existed, on the same fixture."""
+    monkeypatch.setattr(config, "MIN_ROWS_FOR_ML", 5)
+    r = eval_external.evaluate_external(FIXTURE, max_rows=100, currency="all", ks=[5])
+    assert (r["forwarded"], r["rule_flagged"], r["ml_flagged"], r["self_transfers"]) == (3, 3, 0, 14)
+    assert (r["tp"], r["fp"], r["fn"]) == (3, 0, 1)
+    assert r["pr_auc"] == pytest.approx(0.8)
+    assert r["pr_auc_tier0"] == pytest.approx(0.6541666666666667)
+    assert r["precision_at"] == {5: pytest.approx(0.6)}
 
 
 def test_labels_never_reach_the_pipeline(monkeypatch):

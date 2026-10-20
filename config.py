@@ -102,6 +102,17 @@ PLACEHOLDER_ENTITIES = {"unknown_entity", "internal_wallet", "", "nan", "none"}
 # the scoring used before this setting existed.
 EXCLUDE_SELF_TRANSFERS = env_flag("EXCLUDE_SELF_TRANSFERS", True)
 
+# The reporting threshold and the structuring band are cash rules (a currency
+# transaction report covers cash; structuring splits cash to stay under it).
+# With CASH_ONLY_AMOUNT_RULES on and a `channel` column in the ledger, they
+# apply only to CASH_CHANNELS (compared case-insensitively). Off, the default,
+# they apply to every row whatever its channel, as before channels were read.
+# A ledger without the column is unaffected either way.
+CASH_ONLY_AMOUNT_RULES = env_flag("CASH_ONLY_AMOUNT_RULES", False)
+CASH_CHANNELS = frozenset(
+    c.strip().lower() for c in os.getenv("CASH_CHANNELS", "cash").split(",") if c.strip()
+)
+
 # --- Tier 0: statistical funnel ---
 # contamination is deliberately NOT used. A fixed quota flags 15% of a clean
 # batch and drops 85% of a dirty one.

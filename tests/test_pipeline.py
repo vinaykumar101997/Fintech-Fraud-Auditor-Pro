@@ -1527,6 +1527,110 @@ def test_switching_self_transfer_exclusion_off_gives_the_earlier_results(monkeyp
     assert not any("Self-transfer" in r for r in s0)
 
 
+# --- payment channel -----------------------------------------------------------
+@pytest.fixture
+def cash_only_rules(monkeypatch):
+    monkeypatch.setattr(config, "CASH_ONLY_AMOUNT_RULES", True)
+
+
+def test_cash_channels_default_to_cash_only():
+    assert config.CASH_CHANNELS == frozenset({"cash"})
+
+
+def test_cash_only_amount_rules_are_off_by_default():
+    assert config.CASH_ONLY_AMOUNT_RULES is False
+
+
+@pytest.mark.parametrize("channel", ["Wire", "ACH", "Cash", ""])
+def test_switch_off_ignores_the_channel(channel):
+    """Off: the amount rules read exactly as they did before channels existed."""
+    over = evaluate_row(Decimal("12000"), "Germany", "A-1", "B-2", channel=channel)
+    band = evaluate_row(Decimal("9400"), "Germany", "A-1", "B-2", channel=channel)
+    assert over.reasons == evaluate_row(Decimal("12000"), "Germany", "A-1", "B-2").reasons
+    assert band.reasons == evaluate_row(Decimal("9400"), "Germany", "A-1", "B-2").reasons
+    assert over.force_review and band.force_review
+
+
+def test_switch_off_rules_a_channel_ledger_as_if_it_had_no_channel():
+    ledger, _ = load_ledger(io.StringIO(
+        "transaction_id,amount,country,sender,receiver,channel\n"
+        "T1,12000,Germany,A-1,B-2,Cash\n"
+        "T2,12000,Germany,A-1,B-2,Wire\n"
+        "T3,9400,Germany,A-1,B-2,\n"
+        "T4,9400,Germany,A-1,B-2,ACH\n"
+        "T5,50,Germany,A-1,A-1,Wire\n"))
+    with_channel = apply_rules(ledger)
+    without = apply_rules(ledger.drop(columns=["channel"]))
+    for col in ("rule_flag", "rule_reasons", "self_transfer"):
+        assert with_channel[col].tolist() == without[col].tolist(), col
+
+
+@pytest.mark.parametrize("channel", ["Cash", "cash", " CASH "])
+def test_amount_rules_apply_to_cash(cash_only_rules, channel):
+    over = evaluate_row(Decimal("12000"), "Germany", "A-1", "B-2", channel=channel)
+    band = evaluate_row(Decimal("9400"), "Germany", "A-1", "B-2", channel=channel)
+    assert over.force_review and _has(over, "reporting threshold") and _has(over, "cash")
+    assert band.force_review and _has(band, "structuring band") and _has(band, "cash")
+
+
+@pytest.mark.parametrize("channel", ["Wire", "ACH", "Cheque", "Credit Card", "Reinvestment", "Bitcoin"])
+def test_amount_rules_do_not_apply_to_other_channels(cash_only_rules, channel):
+    for amount in ("12000", "9400"):
+        result = evaluate_row(Decimal(amount), "Germany", "A-1", "B-2", channel=channel)
+        assert not result.force_review
+        assert not any("is at or above the" in r or "sits in the structuring band" in r
+                       for r in result.reasons)
+        assert _has(result, f"'{channel}' is not a cash channel")
+
+
+def test_amount_below_the_band_gets_no_channel_note(cash_only_rules):
+    result = evaluate_row(Decimal("500"), "Germany", "A-1", "B-2", channel="Wire")
+    assert result.reasons == []
+
+
+@pytest.mark.parametrize("channel", ["", "   ", None, float("nan")])
+def test_missing_channel_value_keeps_the_amount_rules(cash_only_rules, channel):
+    result = evaluate_row(Decimal("12000"), "Germany", "A-1", "B-2", channel=channel)
+    assert result.force_review and _has(result, "reporting threshold")
+
+
+def test_no_channel_gives_the_earlier_reason_text():
+    """No channel column: the reason reads exactly as before."""
+    result = evaluate_row(Decimal("12000"), "Germany", "A-1", "B-2")
+    assert result.reasons == ["Value 12,000.00 is at or above the 10,000 reporting threshold."]
+    band = evaluate_row(Decimal("9400"), "Germany", "A-1", "B-2")
+    assert band.reasons == ["Value 9,400.00 sits in the structuring band (8,000-10,000), "
+                            "just below the reporting threshold."]
+
+
+def test_non_cash_channel_still_gets_sanctions_and_country_checks(cash_only_rules):
+    hit = evaluate_row(Decimal("12000"), "Germany", "Viktor Bout", "B-2", channel="Wire",
+                       screener=lambda name: "Viktor Bout" if name == "Viktor Bout" else None)
+    assert hit.force_review and _has(hit, "matches sanctions list entry")
+    risky = evaluate_row(Decimal("12000"), "RU", "A-1", "B-2", channel="Wire")
+    assert risky.force_review and _has(risky, "high-risk list")
+
+
+def test_apply_rules_reads_the_channel_column(cash_only_rules):
+    ledger, _ = load_ledger(io.StringIO(
+        "transaction_id,amount,country,sender,receiver,channel\n"
+        "T1,12000,Germany,A-1,B-2,Cash\n"
+        "T2,12000,Germany,A-1,B-2,Wire\n"
+        "T3,9400,Germany,A-1,B-2,\n"
+        "T4,9400,Germany,A-1,B-2,ACH\n"))
+    ruled = apply_rules(ledger)
+    assert ruled["rule_flag"].tolist() == [True, False, True, False]
+
+
+def test_ledger_without_a_channel_column_is_ruled_as_before():
+    ledger = _loaded_ledger(_generator()(seed=7))
+    assert "channel" not in ledger.columns
+    ruled = apply_rules(ledger)
+    expected = [evaluate_row(row["amount"], row["country"], row["sender"], row["receiver"]).reasons
+                for _, row in ledger.iterrows()]
+    assert ruled["rule_reasons"].tolist() == expected
+
+
 if __name__ == "__main__":  # allows running without pytest installed
     import inspect
     passed = failed = 0
