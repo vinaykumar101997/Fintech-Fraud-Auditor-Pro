@@ -384,6 +384,17 @@ The REPORT slice is run once, after the change sets are fixed. If (a) is not met
 
 An amount-rank feature (each amount's percentile rank within the batch) was also tried as part of C; it lowered TUNE PR-AUC at every clipping bound except 3, so it was removed.
 
+**Setting fixed on TUNE before the REPORT run (2026-10-20).** Rule: after C, keep the A and B setting with the highest TUNE PR-AUC; within noise, keep the existing behaviour (A on, B off). With C at a clip of 5, mean TUNE PR-AUC over five Isolation Forest seeds (42, 1, 2, 3, 4) was:
+
+| A (exclude self-transfers) | B (cash-only amount rules) | PR-AUC mean (range) |
+|---|---|---|
+| on | off | 0.00262 (0.00254 to 0.00271) |
+| off | off | 0.00260 (0.00237 to 0.00277) |
+| on | on | 0.00201 (0.00192 to 0.00213) |
+| off | on | 0.00201 (0.00179 to 0.00215) |
+
+B on is worse on every seed. A on and off are within noise. The setting kept is A on, B off, with `FEATURE_Z_CLIP = 5`.
+
 **What this cannot show.**
 
 - **Without `--start` and `--end`, rows come from the top of the file** until `--max-rows` rows are kept. The file is not in time order, so that is not a clean time window. With a date range, laundering chains that cross the range's edges are only partly present.
