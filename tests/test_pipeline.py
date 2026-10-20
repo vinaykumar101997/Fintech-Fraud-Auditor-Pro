@@ -319,7 +319,7 @@ def test_development_seed_matches_the_file_based_evaluation():
     evaluate = _evaluate_module()
     result = evaluate.evaluate_seed(evaluate.DEV_SEED)
     assert (result["rows"], result["laundering"]) == (465, 45)
-    assert (result["tp"], result["fp"], result["fn"], result["forwarded"]) == (38, 13, 7, 51)
+    assert (result["tp"], result["fp"], result["fn"], result["forwarded"]) == (38, 11, 7, 49)
 
 
 @pytest.mark.parametrize("k,n,low,high", [
@@ -1512,6 +1512,7 @@ def test_switching_self_transfer_exclusion_off_gives_the_earlier_results(monkeyp
     import hashlib
 
     monkeypatch.setattr(config, "EXCLUDE_SELF_TRANSFERS", False)
+    monkeypatch.setattr(config, "FEATURE_Z_CLIP", 0.0)  # that code used StandardScaler
     assert evaluate_row(Decimal("12000"), "Germany", "A-1", "A-1").force_review
 
     ruled = apply_rules(_with_self_transfers(_loaded_ledger(_generator()(seed=7))))
@@ -1629,6 +1630,64 @@ def test_ledger_without_a_channel_column_is_ruled_as_before():
     expected = [evaluate_row(row["amount"], row["country"], row["sender"], row["receiver"]).reasons
                 for _, row in ledger.iterrows()]
     assert ruled["rule_reasons"].tolist() == expected
+
+
+# --- scale robustness of the behaviour model ---------------------------------------
+def test_robust_scale_centres_on_the_median_and_clips():
+    import numpy as np
+    from utils.funnel import robust_scale
+
+    x = np.array([[1.0], [2.0], [3.0], [4.0], [100.0]])
+    # median 3, MAD 1, scale 1.4826
+    out = robust_scale(x, bound=5.0)[:, 0]
+    assert out[2] == 0.0
+    assert out[0] == pytest.approx(-2 / 1.4826)
+    assert out[4] == 5.0  # 97 / 1.4826 = 65.4, clipped
+    assert robust_scale(x, bound=None)[4, 0] == pytest.approx(97 / 1.4826)
+
+
+def test_robust_scale_falls_back_when_the_mad_is_zero():
+    import numpy as np
+    from utils.funnel import robust_scale
+
+    x = np.array([[0.0], [0.0], [0.0], [0.0], [1.0]])
+    # MAD 0; mean absolute deviation from the median 0.2, scale 1.2533 * 0.2
+    assert robust_scale(x, bound=None)[4, 0] == pytest.approx(1 / (1.2533 * 0.2))
+    assert robust_scale(x, bound=3.0)[4, 0] == 3.0
+    constant = robust_scale(np.full((4, 1), 7.0), bound=3.0)
+    assert (constant == 0.0).all()
+
+
+def test_one_extreme_value_does_not_move_the_other_rows():
+    import numpy as np
+    from utils.funnel import robust_scale
+
+    base = np.array([[1.0, 5.0], [2.0, 6.0], [3.0, 7.0], [4.0, 8.0], [100.0, 9.0]])
+    huge = base.copy()
+    huge[4, 0] = 1e9
+    np.testing.assert_array_equal(robust_scale(base, 5.0), robust_scale(huge, 5.0))
+
+
+def test_scale_settings_default_to_the_values_chosen_on_the_tuning_slice():
+    assert config.FEATURE_Z_CLIP == 5.0
+
+
+def test_clipping_runs_through_the_funnel(monkeypatch):
+    monkeypatch.setattr(config, "FEATURE_Z_CLIP", 5.0)
+    ledger = _loaded_ledger(_generator()(seed=7))
+    first = run_funnel(apply_rules(ledger))
+    second = run_funnel(apply_rules(ledger))
+    assert first.ml_applied
+    assert (first.forwarded, first.ml_flagged) == (second.forwarded, second.ml_flagged)
+    scores = pd.concat([first.flagged, first.dropped])["ml_score"]
+    assert scores.notna().all()
+
+
+def test_clip_off_uses_the_earlier_scaling(monkeypatch):
+    """FEATURE_Z_CLIP = 0 keeps StandardScaler, so results match the pinned seed-7 run."""
+    monkeypatch.setattr(config, "FEATURE_Z_CLIP", 0.0)
+    result = run_funnel(apply_rules(_loaded_ledger(_generator()(seed=7))))
+    assert result.forwarded == 51
 
 
 if __name__ == "__main__":  # allows running without pytest installed
