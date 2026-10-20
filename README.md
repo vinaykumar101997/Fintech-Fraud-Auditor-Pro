@@ -25,7 +25,7 @@ Measured on a synthetic ledger of 465 transactions, 45 of them labelled as laund
 | Pipeline | Laundering caught (recall) | Flags that were real (precision) | Sent to the AI model |
 |---|---|---|---|
 | Original order (statistics first) | 7% | 33% | 9 rows |
-| Current order (rules first) | 84% | 75% | 51 rows |
+| Current order (rules first) | 84% | 78% | 49 rows |
 
 By type of laundering:
 
@@ -130,7 +130,7 @@ python scripts/ingest_pdf.py --file path/to/aml_guidelines.pdf
 `requirements-dev.txt` is enough for the tests and the evaluation; it includes `langchain-core` and `pydantic` for the prompt-injection tests but skips the model providers and the UI libraries.
 
 ```bash
-pytest tests/ -v                          # 349 offline tests; the full install adds 9 app tests
+pytest tests/ -v                          # 413 offline tests; the full install adds 9 app tests
 python scripts/generate_sample_ledger.py  # fixed seed, so the numbers above reproduce exactly
 python scripts/evaluate.py                # recall and precision by laundering type
 python scripts/evaluate.py --seeds 7 11 13 17 19 23   # development seed plus held-out seeds
@@ -143,7 +143,7 @@ python scripts/eval_external.py --path data/external/HI-Small_Trans.csv --max-ro
 
 ## Known limitations
 
-- **The funnel does not transfer to IBM's AML data.** On 500,000 rows of `HI-Small_Trans.csv` it forwards 37% of rows (about 10% on the synthetic ledgers) at 0.11% precision, against a 0.061% laundering rate, mostly because the amount rules don't fit that data's amounts; see `docs/EVALUATION.md`.
+- **The funnel does not transfer to IBM's AML data.** On a held-back date range of `HI-Small_Trans.csv` (8 to 18 September, 503,288 US Dollar rows) it forwards 19.5% of rows at 0.41% precision and 50.4% recall, against a 0.159% laundering rate; PR-AUC is 2.2 times a random ranking and the top 500 rows hold no laundering. The amount rules alone forward 17% of rows. See `docs/EVALUATION.md`.
 - **The headline numbers come from synthetic ledgers written by the same author as the detector.**
 - **Laundering rings routed through established businesses (`circular_camouflaged`) are mostly missed:** 1 of 34 on the default held-out ledgers.
 - **Sanctions-name matching is measured only on synthetic variants of an 8-entry watchlist.** The variants change casing, punctuation, suffix, word order or one character; the name rule fires on 50 of 50 of them held out. That says nothing about real names, transliterations from other scripts, or a large watchlist. The closest near-miss name scores 84.6 against the 88 threshold, and a misspelt suffix on an otherwise matching name ("Sinaloa Cartel Limted", 84.2) is still missed. The IBM data has no names, so it does not test this.
