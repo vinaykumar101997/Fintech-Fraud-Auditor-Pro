@@ -239,3 +239,98 @@ def test_main_writes_cases_out_and_progress(tmp_path, capsys):
     assert len(rows) == len(CASES)
     printed = capsys.readouterr().out
     assert f"{CASES[0]['id']:<8} expected {CASES[0]['expected_verdict']:<10} returned CLEAR" in printed
+
+
+# --- held-out case set -----------------------------------------------------------
+HELDOUT = harness.load_cases(harness.HELDOUT_CASES_PATH)
+
+
+def test_heldout_set_size_balance_and_ids():
+    counts = Counter(c["expected_verdict"] for c in HELDOUT)
+    assert 18 <= len(HELDOUT) <= 25
+    assert counts["CLEAR"] >= 8 and counts["SUSPICIOUS"] >= 8
+    assert all(c["id"].startswith("H-") for c in HELDOUT)
+    assert not {c["id"] for c in HELDOUT} & {c["id"] for c in CASES}
+
+
+def test_heldout_signal_is_visible_to_the_review():
+    # The review never sees behaviour flags, so no held-out case may depend on them.
+    for case in HELDOUT:
+        assert case["category"] != "pass_through", case["id"]
+        assert case["behaviour_flags"] == [], case["id"]
+        if case["expected_verdict"] == "SUSPICIOUS":
+            assert case["rule_reasons"], case["id"]
+        elif case["category"] == "obvious_clear":
+            assert case["rule_reasons"] == [], case["id"]
+
+
+def test_heldout_labels_are_consistent():
+    for case in HELDOUT:
+        if case["category"] in ("obvious_clear", "over_threshold_legitimate"):
+            assert case["expected_verdict"] == "CLEAR", case["id"]
+        if case["category"] == "over_threshold_legitimate":
+            assert Decimal(case["transaction"]["amount"]) >= config.REPORTING_THRESHOLD, case["id"]
+
+
+def test_heldout_rule_reasons_match_the_rules_engine():
+    for case in HELDOUT:
+        txn = case["transaction"]
+        result = evaluate_row(amount=Decimal(txn["amount"]), country=txn["country"],
+                              sender=txn["sender"], receiver=txn["receiver"], screener=rule_screener)
+        assert case["rule_reasons"] == result.reasons, case["id"]
+
+
+def test_heldout_sanctions_hits_are_watchlist_entries_or_aliases():
+    with config.SANCTIONS_CSV.open(encoding="utf-8") as fh:
+        watchlisted = {row["name"] for row in csv.DictReader(fh)}
+    for case in HELDOUT:
+        for party in ("sender", "receiver"):
+            hit = rule_screener(case["transaction"][party])
+            if hit:
+                assert hit in watchlisted, (case["id"], hit)
+
+
+def test_heldout_oracle_scores_100_percent():
+    _, m = _run("oracle", cases=HELDOUT)
+    assert m["accuracy"][:2] == (len(HELDOUT), len(HELDOUT))
+
+
+# --- case file and category options -----------------------------------------------
+def test_main_runs_another_case_file_and_names_it(tmp_path):
+    out = tmp_path / "report.md"
+    assert harness.main(["--cases", str(harness.HELDOUT_CASES_PATH), "--out", str(out)]) == 0
+    text = out.read_text(encoding="utf-8")
+    assert "Case file: tests/fixtures/llm_cases_heldout.json; excluded categories: none" in text
+    assert f"Cases reviewed: {len(HELDOUT)} of {len(HELDOUT)}" in text
+
+
+def test_main_excludes_categories_and_reports_them(tmp_path):
+    out = tmp_path / "report.md"
+    rows = tmp_path / "cases.jsonl"
+    argv = ["--exclude-category", "pass_through", "--exclude-category", "prompt_injection",
+            "--out", str(out), "--cases-out", str(rows)]
+    assert harness.main(argv) == 0
+    text = out.read_text(encoding="utf-8")
+    kept = [c for c in CASES if c["category"] not in ("pass_through", "prompt_injection")]
+    assert "Case file: tests/fixtures/llm_cases.json; excluded categories: pass_through, prompt_injection" in text
+    assert f"Cases reviewed: {len(kept)} of {len(kept)}" in text
+    assert "| pass_through |" not in text and "| prompt_injection |" not in text
+    ids = [json.loads(line)["id"] for line in rows.read_text(encoding="utf-8").splitlines()]
+    assert ids == [c["id"] for c in kept]
+
+
+def test_report_footer_explains_pass_through(tmp_path):
+    out = tmp_path / "report.md"
+    harness.main(["--out", str(out)])
+    assert out.read_text(encoding="utf-8").rstrip().endswith(harness.PASS_THROUGH_NOTE)
+
+
+def test_excluding_every_category_is_an_error():
+    argv = [arg for cat in harness.CATEGORIES for arg in ("--exclude-category", cat)]
+    with pytest.raises(SystemExit):
+        harness.main(argv)
+
+
+def test_unknown_category_is_rejected():
+    with pytest.raises(SystemExit):
+        harness.main(["--exclude-category", "no_such_category"])

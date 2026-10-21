@@ -1,0 +1,328 @@
+{
+  "description": "Held-out synthetic labelled cases for scripts/eval_llm_tier.py, kept apart from llm_cases.json (the development set). Every SUSPICIOUS case carries its signal in the fields the review receives; none relies on behaviour flags. All names are invented except entries and aliases on the bundled demo watchlist. rule_reasons are the output of utils.rules.evaluate_row for the transaction fields.",
+  "cases": [
+    {
+      "id": "H-01",
+      "category": "obvious_clear",
+      "expected_verdict": "CLEAR",
+      "transaction": {
+        "amount": "2180.00",
+        "country": "United Kingdom",
+        "sender": "Ashcombe Dental Practice",
+        "receiver": "Priya Venkataraman"
+      },
+      "rule_reasons": [],
+      "behaviour_flags": [],
+      "note": "Monthly salary from an established employer."
+    },
+    {
+      "id": "H-02",
+      "category": "obvious_clear",
+      "expected_verdict": "CLEAR",
+      "transaction": {
+        "amount": "1450.00",
+        "country": "Ireland",
+        "sender": "Corrib Lane Florists",
+        "receiver": "Mallow Street Estates"
+      },
+      "rule_reasons": [],
+      "behaviour_flags": [],
+      "note": "Monthly shop rent to a landlord."
+    },
+    {
+      "id": "H-03",
+      "category": "obvious_clear",
+      "expected_verdict": "CLEAR",
+      "transaction": {
+        "amount": "386.27",
+        "country": "France",
+        "sender": "Atelier Roussel",
+        "receiver": "Valmont Energie SA"
+      },
+      "rule_reasons": [],
+      "behaviour_flags": [],
+      "note": "Monthly electricity bill."
+    },
+    {
+      "id": "H-04",
+      "category": "obvious_clear",
+      "expected_verdict": "CLEAR",
+      "transaction": {
+        "amount": "7240.00",
+        "country": "Japan",
+        "sender": "Hollin Precision Tools Ltd",
+        "receiver": "Kisaragi Machine Parts KK"
+      },
+      "rule_reasons": [],
+      "behaviour_flags": [],
+      "note": "Invoice from a long-standing overseas parts supplier."
+    },
+    {
+      "id": "H-05",
+      "category": "obvious_clear",
+      "expected_verdict": "CLEAR",
+      "transaction": {
+        "amount": "2995.00",
+        "country": "United States",
+        "sender": "Brennick Analytics GmbH",
+        "receiver": "Tallowmere Hosting Inc"
+      },
+      "rule_reasons": [],
+      "behaviour_flags": [],
+      "note": "Annual software hosting subscription billed by a foreign provider."
+    },
+    {
+      "id": "H-06",
+      "category": "obvious_clear",
+      "expected_verdict": "CLEAR",
+      "transaction": {
+        "amount": "5120.50",
+        "country": "Poland",
+        "sender": "Wexley Furniture Ltd",
+        "receiver": "Dabrowa Wood Panels Sp z o.o."
+      },
+      "rule_reasons": [],
+      "behaviour_flags": [],
+      "note": "Board supplier invoice."
+    },
+    {
+      "id": "H-07",
+      "category": "obvious_clear",
+      "expected_verdict": "CLEAR",
+      "transaction": {
+        "amount": "3400.00",
+        "country": "United Arab Emirates",
+        "sender": "Harbury Events Ltd",
+        "receiver": "Saffar Exhibition Halls LLC"
+      },
+      "rule_reasons": [],
+      "behaviour_flags": [],
+      "note": "Stand hire at a trade fair abroad."
+    },
+    {
+      "id": "H-08",
+      "category": "over_threshold_legitimate",
+      "expected_verdict": "CLEAR",
+      "transaction": {
+        "amount": "312000.00",
+        "country": "United Kingdom",
+        "sender": "Elmhurst Veterinary Partners",
+        "receiver": "Kingsmere Developments Ltd"
+      },
+      "rule_reasons": [
+        "Value 312,000.00 is at or above the 10,000 reporting threshold."
+      ],
+      "behaviour_flags": [],
+      "note": "Purchase of a new-build clinic unit from the developer."
+    },
+    {
+      "id": "H-09",
+      "category": "over_threshold_legitimate",
+      "expected_verdict": "CLEAR",
+      "transaction": {
+        "amount": "54800.00",
+        "country": "Germany",
+        "sender": "Calder Print Works Ltd",
+        "receiver": "Rheinfeld Druckmaschinen GmbH"
+      },
+      "rule_reasons": [
+        "Value 54,800.00 is at or above the 10,000 reporting threshold."
+      ],
+      "behaviour_flags": [],
+      "note": "Printing press bought from the manufacturer."
+    },
+    {
+      "id": "H-10",
+      "category": "over_threshold_legitimate",
+      "expected_verdict": "CLEAR",
+      "transaction": {
+        "amount": "26450.00",
+        "country": "Singapore",
+        "sender": "Morwen Textiles Ltd",
+        "receiver": "Lianhua Fabric Mills Pte Ltd"
+      },
+      "rule_reasons": [
+        "Value 26,450.00 is at or above the 10,000 reporting threshold."
+      ],
+      "behaviour_flags": [],
+      "note": "Quarterly fabric supplier invoice."
+    },
+    {
+      "id": "H-11",
+      "category": "structuring",
+      "expected_verdict": "SUSPICIOUS",
+      "transaction": {
+        "amount": "9780.00",
+        "country": "United Kingdom",
+        "sender": "Corvane Trading Ltd",
+        "receiver": "Brisklane Currency Exchange"
+      },
+      "rule_reasons": [
+        "Value 9,780.00 sits in the structuring band (8,000-10,000), just below the reporting threshold."
+      ],
+      "behaviour_flags": [],
+      "note": "Amount just under the threshold to a currency exchange."
+    },
+    {
+      "id": "H-12",
+      "category": "structuring",
+      "expected_verdict": "SUSPICIOUS",
+      "transaction": {
+        "amount": "9950.00",
+        "country": "United States",
+        "sender": "Dariusz Kellam",
+        "receiver": "Velocet Money Transfer"
+      },
+      "rule_reasons": [
+        "Value 9,950.00 sits in the structuring band (8,000-10,000), just below the reporting threshold."
+      ],
+      "behaviour_flags": [],
+      "note": "Amount just under the threshold to a money transfer business."
+    },
+    {
+      "id": "H-13",
+      "category": "structuring",
+      "expected_verdict": "SUSPICIOUS",
+      "transaction": {
+        "amount": "9499.99",
+        "country": "Germany",
+        "sender": "Henrik Vasser",
+        "receiver": "Goldkurs Edelmetall Ankauf"
+      },
+      "rule_reasons": [
+        "Value 9,499.99 sits in the structuring band (8,000-10,000), just below the reporting threshold."
+      ],
+      "behaviour_flags": [],
+      "note": "Amount just under the threshold to a precious-metals buyer."
+    },
+    {
+      "id": "H-14",
+      "category": "high_risk_jurisdiction",
+      "expected_verdict": "SUSPICIOUS",
+      "transaction": {
+        "amount": "3600.00",
+        "country": "Syria",
+        "sender": "Levant Agro Supplies",
+        "receiver": "Orontes General Trading"
+      },
+      "rule_reasons": [
+        "Counterparty jurisdiction 'Syria' (SY) is on the high-risk list."
+      ],
+      "behaviour_flags": [],
+      "note": "Payment into a high-risk jurisdiction."
+    },
+    {
+      "id": "H-15",
+      "category": "high_risk_jurisdiction",
+      "expected_verdict": "SUSPICIOUS",
+      "transaction": {
+        "amount": "12400.00",
+        "country": "Belarus",
+        "sender": "Daugava Timber SIA",
+        "receiver": "Svislach Industrial Supply"
+      },
+      "rule_reasons": [
+        "Value 12,400.00 is at or above the 10,000 reporting threshold.",
+        "Counterparty jurisdiction 'Belarus' (BY) is on the high-risk list."
+      ],
+      "behaviour_flags": [],
+      "note": "Over-threshold payment into a high-risk jurisdiction."
+    },
+    {
+      "id": "H-16",
+      "category": "high_risk_jurisdiction",
+      "expected_verdict": "SUSPICIOUS",
+      "transaction": {
+        "amount": "5250.00",
+        "country": "Myanmar",
+        "sender": "Tamsin Jewellery Ltd",
+        "receiver": "Pyinsa Gem Brokers"
+      },
+      "rule_reasons": [
+        "Counterparty jurisdiction 'Myanmar' (MM) is on the high-risk list."
+      ],
+      "behaviour_flags": [],
+      "note": "Gem purchase from a high-risk jurisdiction."
+    },
+    {
+      "id": "H-17",
+      "category": "high_risk_jurisdiction",
+      "expected_verdict": "SUSPICIOUS",
+      "transaction": {
+        "amount": "2900.00",
+        "country": "United Arab Emirates",
+        "sender": "Corniche Freight FZE",
+        "receiver": "Melli Bank"
+      },
+      "rule_reasons": [
+        "Receiver 'Melli Bank' matches sanctions list entry 'Bank Melli Iran'."
+      ],
+      "behaviour_flags": [],
+      "note": "Receiver is an alias of a sanctioned bank; the country itself is not listed."
+    },
+    {
+      "id": "H-18",
+      "category": "high_risk_jurisdiction",
+      "expected_verdict": "SUSPICIOUS",
+      "transaction": {
+        "amount": "4450.00",
+        "country": "Netherlands",
+        "sender": "Vanta Digital BV",
+        "receiver": "Tornado.Cash"
+      },
+      "rule_reasons": [
+        "Receiver 'Tornado.Cash' matches sanctions list entry 'Tornado Cash'."
+      ],
+      "behaviour_flags": [],
+      "note": "Receiver is a spelling variant of a sanctioned mixer."
+    },
+    {
+      "id": "H-19",
+      "category": "high_risk_jurisdiction",
+      "expected_verdict": "SUSPICIOUS",
+      "transaction": {
+        "amount": "7800.00",
+        "country": "Cyprus",
+        "sender": "Kestrel Ore Holdings",
+        "receiver": "PMC Wagner"
+      },
+      "rule_reasons": [
+        "Receiver 'PMC Wagner' matches sanctions list entry 'Wagner Group'."
+      ],
+      "behaviour_flags": [],
+      "note": "Receiver is an alias of a sanctioned group."
+    },
+    {
+      "id": "H-20",
+      "category": "layering_shell",
+      "expected_verdict": "SUSPICIOUS",
+      "transaction": {
+        "amount": "6000.00",
+        "country": "Seychelles",
+        "sender": "Pinnacle Global Ventures 21 Ltd",
+        "receiver": "Pinnacle Global Ventures 22 Ltd"
+      },
+      "rule_reasons": [
+        "Counterparty jurisdiction 'Seychelles' (SC) is a recognised secrecy jurisdiction."
+      ],
+      "behaviour_flags": [],
+      "note": "Round sum between numbered sibling entities in a secrecy jurisdiction."
+    },
+    {
+      "id": "H-21",
+      "category": "layering_shell",
+      "expected_verdict": "SUSPICIOUS",
+      "transaction": {
+        "amount": "4999.00",
+        "country": "Panama",
+        "sender": "Orbis Capital Partners SA",
+        "receiver": "Orbis Capital Partners S.A."
+      },
+      "rule_reasons": [
+        "Counterparty jurisdiction 'Panama' (PA) is a recognised secrecy jurisdiction."
+      ],
+      "behaviour_flags": [],
+      "note": "Money moved straight back to a near-identical name in a secrecy jurisdiction."
+    }
+  ]
+}

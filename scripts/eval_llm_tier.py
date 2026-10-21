@@ -15,6 +15,8 @@ no network and no credentials. The fake modes test the harness itself:
 
     python scripts/eval_llm_tier.py
     python scripts/eval_llm_tier.py --fake always-clear
+    python scripts/eval_llm_tier.py --cases tests/fixtures/llm_cases_heldout.json
+    python scripts/eval_llm_tier.py --exclude-category pass_through
     python scripts/eval_llm_tier.py --live --max-calls 40 --out llm_eval.md \
         --cases-out data/llm_cases_live.jsonl
 
@@ -55,6 +57,12 @@ from evaluate import wilson_interval  # noqa: E402
 from utils.verdicts import AuditOutcome, Verdict  # noqa: E402
 
 CASES_PATH = config.PROJECT_ROOT / "tests" / "fixtures" / "llm_cases.json"
+HELDOUT_CASES_PATH = config.PROJECT_ROOT / "tests" / "fixtures" / "llm_cases_heldout.json"
+PASS_THROUGH_NOTE = (
+    "Note: pass_through cases cannot be answered by the review. Their signal is in the "
+    "behaviour flags, and the review does not receive behaviour flags, only the transaction "
+    "fields and rule reasons."
+)
 CATEGORIES = (
     "obvious_clear", "over_threshold_legitimate", "structuring", "high_risk_jurisdiction",
     "layering_shell", "pass_through", "prompt_injection",
@@ -425,9 +433,20 @@ def _ratio(k: int, n: int, interval=None) -> str:
     return text
 
 
-def report_lines(run: Run, metrics: Dict[str, Any], label: str) -> List[str]:
+def display_path(path: Path) -> str:
+    """Path relative to the project when it is inside it, else the file name."""
+    try:
+        return Path(path).resolve().relative_to(config.PROJECT_ROOT.resolve()).as_posix()
+    except ValueError:
+        return Path(path).name
+
+
+def report_lines(run: Run, metrics: Dict[str, Any], label: str,
+                 cases_file: Path = CASES_PATH, excluded=()) -> List[str]:
     """The report as markdown; it also reads fine on the console."""
     lines = [f"## LLM tier evaluation: {label}", ""]
+    lines.append(f"Case file: {display_path(cases_file)}; excluded categories: "
+                 f"{', '.join(excluded) if excluded else 'none'}")
     lines.append(f"Cases reviewed: {metrics['n']} of {run.total_cases}; model calls: {run.calls}")
     if run.stopped_at_cap:
         lines.append("Stopped at the call cap; results below are partial.")
@@ -481,9 +500,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="append one JSON row per finished case to this JSONL file")
     parser.add_argument("--price-in", type=float, default=None, help="USD per million input tokens")
     parser.add_argument("--price-out", type=float, default=None, help="USD per million output tokens")
+    parser.add_argument("--exclude-category", action="append", default=[], choices=CATEGORIES,
+                        metavar="NAME", help="leave out every case in this category (repeatable)")
     args = parser.parse_args(argv)
 
-    cases = load_cases(args.cases)
+    excluded = tuple(dict.fromkeys(args.exclude_category))
+    cases = [c for c in load_cases(args.cases) if c["category"] not in excluded]
+    if not cases:
+        parser.error("no cases left after --exclude-category")
     cap = args.max_calls
     if args.live and cap is None:
         cap = DEFAULT_LIVE_MAX_CALLS
@@ -511,9 +535,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             cases_out.close()
     print()
     metrics = score(run.results)
-    lines = report_lines(run, metrics, label)
+    lines = report_lines(run, metrics, label, cases_file=args.cases, excluded=excluded)
     if args.live:
         lines += ["", cost_line(meter, config.chat_model_name(), args.price_in, args.price_out)]
+    lines += ["", PASS_THROUGH_NOTE]
 
     text = "\n".join(lines)
     print(text)
