@@ -566,12 +566,36 @@ Without `--live` the harness uses a deterministic fake model and a fake retrieve
 | always-suspicious | 18/31 | 18/31 | 18/18 | 0/31 | 0 |
 | error | 0/31 | n/a (none predicted) | 0/18 | 31/31 | 0 |
 
-No live results yet.
+**Development baseline (two live runs, same configuration).** Vertex AI, Gemini 2.5 Flash, the 31 development cases:
+
+| | Run 1 | Run 2 |
+|---|---|---|
+| Verdict accuracy | 18/31 (58%) | 20/31 (65%) |
+| SUSPICIOUS recall | 16/18 | 17/18 |
+| SUSPICIOUS precision | 16/26 | 17/27 |
+| Clean cases cleared | 2/13 | 3/13 |
+| Errored reviews | 1 | 0 |
+| Model calls | 67 | 63 |
+| Output tokens | 345,763 | 29,037 |
+| Estimated cost | about $0.89 | about $0.09 |
+
+In run 1 one review failed after four attempts because the model called a built-in tool instead of returning the structured assessment; it was reported as ERROR and none was counted as CLEAR. The cause of the twelvefold difference in output tokens between the runs is unknown. A review takes about 22 seconds and two model calls. Run-to-run differences of one or two cases are noise, not a change in quality. Only run 2 has per-case records (`--cases-out`).
+
+**What the per-case records showed.** All ten false positives were clean cases returned SUSPICIOUS. None had a high-risk rule reason: four had no rule reasons and six had only the neutral reporting-threshold line. In their rationales the model treats the bare ledger row as an incomplete wire message (seven of ten), treats an amount near a threshold as evidence (six), and escalates because the evidence is ambiguous (three). Pages 81-82 of the guidance, on wire transfers, were retrieved for all 31 cases. The 410 stored chunks are all distinct; a page that appears twice in one retrieval is two overlapping chunks of the same page, not a duplicate ingestion. The review prompt tells the model to prefer escalation when the evidence is ambiguous, and the output schema asks for the regulatory basis of the verdict. One rationale cited "Recommendation 82", which does not exist (FATF has 40 recommendations); it looks like a page number. The four prompt-injection cases are escalated by the engine's own guard, so they test the guard rather than the model's judgement. The three pass-through cases cannot be answered because the review does not receive the behaviour-model flags; that category is reported separately and excluded from any acceptance rule.
+
+**Pre-registered plan** (written before any change to the review).
+
+- The 31 cases in `llm_cases.json` are the development set. The held-out set (`tests/fixtures/llm_cases_heldout.json`, 21 cases) is run once, after a change has been chosen on the development set.
+- Disclosure: the held-out cases were written after the development failures had been inspected, by the same author who wrote the labels. Every held-out SUSPICIOUS case has a rule reason, so the set measures the reduction of false positives, not the detection of suspicious cases without a rule hit.
+- Change 1, one variable only: add one sentence to the reviewer prompt saying the record is an internal ledger extract that never contains addresses, account numbers, payment purpose or wire-message data, so their absence is not by itself an indicator of suspicion. Everything else stays as it is.
+- Acceptance on the development set, excluding pass_through: at least 8 of 13 clean cases cleared (baseline 2 and 3); none of the SUSPICIOUS cases that were correct in run 2 changes to CLEAR; no errored reviews.
+- If change 1 passes, the held-out set is run once. It passes with at least 6 of 10 clean cases cleared and at least 10 of 11 SUSPICIOUS cases correct. The result is reported whatever it is.
+- If change 1 fails the development rule, it is recorded as a negative result and the next change is tried, one at a time, in this order: remove the escalate-on-ambiguity tie-break; build the retrieval query from the evidence only; explain the rule-hit line outside the untrusted fence.
 
 **Limits.**
 
 - The expected verdicts were written by the project author and have not been independently annotated.
-- The set is 31 synthetic cases, so the intervals are wide and any result is indicative only.
+- The development set is 31 synthetic cases and the held-out set is 21. With sets this small the intervals are wide and any result is indicative only.
 - The review does not receive the behaviour-model flags, so the three pass-through cases, which have no rule hit, are expected misses.
 - The prompt-injection cases are scored against the engine's policy of escalating any reported injection to SUSPICIOUS.
 - A full live run makes two model calls per case, so it needs `--max-calls 62` or more.
