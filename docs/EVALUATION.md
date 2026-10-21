@@ -508,3 +508,25 @@ Measured on 2026-10-17 (Python 3.12.10, Windows 11), comparing the previous comm
 | repeated, 19,995 rows | 39,990 | 1,287 to 1,450 ms | 3.8 to 4.0 ms |
 
 These times cover screening only. The whole of `apply_rules`, which also loops over rows in pandas, went from 71 to 76 ms to 15 to 37 ms on 465 rows, and from 2.9 to 3.0 s to 0.6 to 1.4 s on 19,995 rows; those totals varied a lot between runs on this machine. The gain grows with the number of rows per distinct name and with the size of the watchlist, but a full OFAC list has not been measured.
+
+## Live check of the AI review tier
+
+On 2026-10-21 the AI review tier (`utils/agents.py`) ran against a live model: Gemini 2.5 Flash on Google Vertex AI, with retrieval over 410 fragments of a public AML guidance PDF, embedded with Vertex `text-embedding-004` and stored in a local Qdrant. Five rows forwarded from the 465-row sample ledger were reviewed one at a time through the same engine the app uses.
+
+All five reviews returned a verdict that validated against the output schema. Retrieval returned five passages for each one, and there were no retries and no failed reviews.
+
+| Verdict | Count | What the review cited |
+|---|---|---|
+| SUSPICIOUS | 3 | generic sender and receiver names; a sanctioned jurisdiction with an unknown receiver; an amount just under the reporting threshold sent to the Cayman Islands |
+| CLEAR | 2 | both rows hit the reporting-threshold rule (amount of 10,000 or more); the reviews found nothing beyond the size of the amount |
+
+**What happens to a CLEAR verdict on a reporting-threshold hit.** The rule sets a force-review flag, so the funnel cannot drop the row and it always reaches the AI tier; the rule reasons are recorded in the audit log when the row is forwarded. The CLEAR verdict is then recorded in the audit log with its rationale, and the row stays in the investigative ledger, where "Why was a transaction forwarded?" still lists the threshold rule. From there a CLEAR row is not offered for SAR drafting or the officer-review panel, which list SUSPICIOUS rows only. The network check can still be run on it, but the CLEAR verdict adds no points, so it pauses for an officer only if network patterns or missing counterparty data reach the review threshold on their own. The pipeline has no threshold-report path: the reporting-threshold rule only forces an AI review, and nothing files or queues a report for amounts over the threshold. Both CLEAR rationales noted that a threshold report is still required; that filing has to happen outside this tool.
+
+**Cost and time.** Each review makes two model calls (retrieval-grounded analysis, then the structured review). The five took 119.5 s in total, about 24 s per transaction, and used roughly 11,000 input and 3,900 output tokens, about $0.01 to $0.02 at list prices.
+
+**Limits.**
+
+- Five rows show that the tier runs end to end, not how accurate its verdicts are. Verdict accuracy has not been measured yet.
+- Only the Vertex path was exercised. The Bedrock path was not part of this check.
+- At the time of the check, PDF ingestion needed the settings exported in the shell because `config.py` did not read `.env`. `config.py` now loads the repository's `.env` itself, without overriding variables already set.
+- The Vertex integration uses LangChain's `ChatVertexAI` and `VertexAIEmbeddings`, which are deprecated in favour of `langchain-google-genai`. Migrating is still to do.
