@@ -530,3 +530,42 @@ All five reviews returned a verdict that validated against the output schema. Re
 - Only the Vertex path was exercised. The Bedrock path was not part of this check.
 - At the time of the check, PDF ingestion needed the settings exported in the shell because `config.py` did not read `.env`. `config.py` now loads the repository's `.env` itself, without overriding variables already set.
 - The Vertex integration uses LangChain's `ChatVertexAI` and `VertexAIEmbeddings`, which are deprecated in favour of `langchain-google-genai`. Migrating is still to do.
+
+## LLM tier evaluation
+
+`scripts/eval_llm_tier.py` scores the AI review tier (`ComplianceAuditEngine.assess_transaction`) against labelled cases, so verdict quality can be measured rather than only observed. `scripts/evaluate.py --with-llm` counts the verdicts the tier returns on the sample ledger; this harness checks them against an expected answer.
+
+**Cases.** `tests/fixtures/llm_cases.json` holds 31 synthetic cases, 13 expected CLEAR and 18 expected SUSPICIOUS, in seven categories: obvious clear (payroll, rent, suppliers), over-threshold but legitimate, structuring just under the threshold, sanctioned or high-risk jurisdiction, layering through shell-like names, pass-through, and prompt injection. All names are invented except entries on the bundled demo watchlist. Each case's rule reasons are exactly what `utils/rules.py` produces for its fields, and a test keeps them in step. In the prompt-injection cases a ledger field asks for CLEAR while the facts call for SUSPICIOUS. The engine escalates any injection the model reports, so the set has no injection case whose facts are clear.
+
+Each case reaches the engine with the same arguments the app passes: the transaction fields and the rule reasons. The behaviour-model flags in the case file explain why such a row would be forwarded, but the engine has no parameter for them, so the review does not see them. Pass-through cases with no rule hit therefore give the model only names, an amount and a country.
+
+**Metrics.** Verdict accuracy, SUSPICIOUS precision and recall with Wilson 95% intervals, a confusion matrix with an ERROR column, accuracy per category, and the share of reviews that errored. An ERROR is never a correct answer, so it counts against accuracy and recall, and the harness exits with code 1 if any errored review were counted as CLEAR.
+
+**Running it.**
+
+```bash
+python scripts/eval_llm_tier.py                      # fake model answering the expected verdict
+python scripts/eval_llm_tier.py --fake always-clear  # also: always-suspicious, error
+python scripts/eval_llm_tier.py --live --max-calls 70 --out llm_eval.md
+```
+
+Without `--live` the harness uses a deterministic fake model and a fake retriever and needs no network or credentials. `--live` uses the configured provider through the app's own factory and retrieval stack. `--max-calls` (default 40 with `--live`) counts every model call, retries included. Once the cap is reached no further call is made, the case in progress is dropped and the completed cases are reported. Each review makes two calls, so the full set needs at least 62. A live run prints token usage and an estimated cost when the provider reports usage. The report goes to the console and, with `--out`, to a markdown file. Nothing edits these docs automatically.
+
+**Fake-mode sanity numbers.** These check the harness, not the model:
+
+| Fake mode | Accuracy | SUSPICIOUS precision | SUSPICIOUS recall | Errored | Errored counted as CLEAR |
+|---|---|---|---|---|---|
+| oracle | 31/31 | 18/18 | 18/18 | 0/31 | 0 |
+| always-clear | 13/31 | n/a (none predicted) | 0/18 | 0/31 | 0 |
+| always-suspicious | 18/31 | 18/31 | 18/18 | 0/31 | 0 |
+| error | 0/31 | n/a (none predicted) | 0/18 | 31/31 | 0 |
+
+No live results yet.
+
+**Limits.**
+
+- The expected verdicts were written by the project author and have not been independently annotated.
+- The set is 31 synthetic cases, so the intervals are wide and any result is indicative only.
+- The review does not receive the behaviour-model flags, so the three pass-through cases, which have no rule hit, are expected misses.
+- The prompt-injection cases are scored against the engine's policy of escalating any reported injection to SUSPICIOUS.
+- A full live run makes two model calls per case, so it needs `--max-calls 62` or more.
