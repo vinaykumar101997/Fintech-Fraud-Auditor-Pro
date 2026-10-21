@@ -7,6 +7,7 @@ requirements-dev.txt installs.
 from __future__ import annotations
 
 import csv
+import json
 import sys
 from collections import Counter
 from decimal import Decimal
@@ -175,3 +176,66 @@ def test_main_defaults_to_the_fake_model(tmp_path, capsys):
     text = out.read_text(encoding="utf-8")
     assert "fake model, oracle" in text
     assert f"| Verdict accuracy | {len(CASES)}/{len(CASES)} = 100%" in text
+
+
+# --- per-case record -------------------------------------------------------------
+ROW_FIELDS = {
+    "id", "category", "expected", "returned", "confidence", "reasoning", "error_detail",
+    "rule_reasons", "passages_retrieved", "passage_ids", "model_calls", "input_tokens",
+    "output_tokens", "seconds",
+}
+
+
+def _run_to_file(mode, path, cases=CASES, cap=None):
+    budget = harness.CallBudget(cap)
+    engine, rag_engine, fake = harness.build_fake(mode, budget)
+    with path.open("a", encoding="utf-8") as fh:
+        run = harness.run_cases(cases, engine, rag_engine, budget, fake=fake, cases_out=fh)
+    lines = path.read_text(encoding="utf-8").splitlines()
+    return run, [json.loads(line) for line in lines]
+
+
+def test_cases_out_writes_one_json_row_per_case(tmp_path):
+    run, rows = _run_to_file("oracle", tmp_path / "cases.jsonl")
+    assert len(rows) == len(CASES) == len(run.results)
+    by_id = {c["id"]: c for c in CASES}
+    for row in rows:
+        assert set(row) == ROW_FIELDS
+        case = by_id[row["id"]]
+        assert row["returned"] == row["expected"] == case["expected_verdict"]
+        assert row["rule_reasons"] == case["rule_reasons"]
+        assert row["reasoning"] == "Fake oracle review."
+        assert row["passages_retrieved"] == 5
+        assert row["passage_ids"][0] == "fake-passage-1"
+        assert row["model_calls"] == 2
+        assert row["input_tokens"] is None and row["output_tokens"] is None
+        assert row["error_detail"] is None
+        assert row["seconds"] >= 0
+
+
+@pytest.mark.parametrize("cap", [1, 7])
+def test_cases_out_keeps_finished_rows_at_the_cap(tmp_path, cap):
+    run, rows = _run_to_file("oracle", tmp_path / "cases.jsonl", cap=cap)
+    assert run.stopped_at_cap
+    assert [r["id"] for r in rows] == [c["id"] for c in CASES[:cap // 2]]
+
+
+def test_cases_out_records_errors(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "LLM_MAX_RETRIES", 0)
+    _, rows = _run_to_file("error", tmp_path / "cases.jsonl", cases=CASES[:3])
+    assert len(rows) == 3
+    for row in rows:
+        assert row["returned"] == "ERROR"
+        assert "fake provider outage" in row["error_detail"]
+        assert row["reasoning"] is None
+        assert row["passages_retrieved"] == 0
+        assert row["model_calls"] == 1
+
+
+def test_main_writes_cases_out_and_progress(tmp_path, capsys):
+    out = tmp_path / "nested" / "cases.jsonl"
+    assert harness.main(["--fake", "always-clear", "--cases-out", str(out)]) == 0
+    rows = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
+    assert len(rows) == len(CASES)
+    printed = capsys.readouterr().out
+    assert f"{CASES[0]['id']:<8} expected {CASES[0]['expected_verdict']:<10} returned CLEAR" in printed

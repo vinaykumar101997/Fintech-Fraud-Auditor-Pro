@@ -23,3 +23,6 @@ data/external/
 qdrant_storage/
 eval/
 docs/INTERVIEW_PREP.md
+# Evaluation outputs (reports, per-case JSONL); never commit them
+data/*.jsonl
+data/*.md

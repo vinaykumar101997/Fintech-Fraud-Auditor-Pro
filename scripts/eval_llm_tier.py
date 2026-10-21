@@ -15,12 +15,18 @@ no network and no credentials. The fake modes test the harness itself:
 
     python scripts/eval_llm_tier.py
     python scripts/eval_llm_tier.py --fake always-clear
-    python scripts/eval_llm_tier.py --live --max-calls 40 --out llm_eval.md
+    python scripts/eval_llm_tier.py --live --max-calls 40 --out llm_eval.md \
+        --cases-out data/llm_cases_live.jsonl
 
 --live runs the configured provider (MODEL_PROVIDER) through the same factory
 and retrieval stack the app uses. --max-calls caps every model call, including
 retries; once the cap is reached no further call is made, the case in progress
 is dropped and the cases completed so far are reported.
+
+--cases-out appends one JSON row per finished case (verdict, confidence, the
+reviewer's rationale, error detail, the rule reasons sent, retrieved passage
+ids, calls, tokens, seconds) and flushes it at once, so an early stop or a
+crash keeps every case finished before it.
 
 Each case is passed to the engine with exactly the arguments the app passes:
 the transaction fields and the rule reasons. The behaviour-model flags in the
@@ -32,12 +38,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TextIO
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -167,10 +175,55 @@ class FakeRetrievalQA:
         self.llm = llm
         self.passages = passages
 
-    def invoke(self, payload: Dict[str, str]) -> Dict[str, Any]:
+    def invoke(self, payload: Dict[str, str], config=None) -> Dict[str, Any]:
+        from langchain_core.documents import Document
+
         self.llm.call()
-        docs = [f"Fake regulatory passage {i + 1}." for i in range(self.passages)]
+        docs = [Document(page_content=f"Fake regulatory passage {i + 1}.",
+                         metadata={"source": f"fake-passage-{i + 1}"})
+                for i in range(self.passages)]
         return {"result": "Fake first-pass finding.", "source_documents": docs}
+
+
+# --------------------------------------------------------------------------
+# Retrieved passages
+# --------------------------------------------------------------------------
+def passage_id(doc) -> str:
+    """Short id for a retrieved passage: title or file name, plus page."""
+    meta = getattr(doc, "metadata", None) or {}
+    name = meta.get("title") or os.path.basename(str(meta.get("source") or meta.get("file_path") or ""))
+    page = meta.get("page")
+    if not name:
+        return "unknown"
+    return f"{name} p{page}" if page is not None else name
+
+
+class PassageRecorder:
+    """Wraps the retrieval chain and keeps the passages of its last answer.
+
+    The live chain does not return its source documents, so a retriever
+    callback records them; the fake chain returns them in its result.
+    """
+
+    def __init__(self, chain):
+        from langchain_core.callbacks import BaseCallbackHandler
+
+        recorder = self
+
+        class _OnRetrieve(BaseCallbackHandler):
+            def on_retriever_end(self, documents, **kwargs):
+                recorder.documents = list(documents)
+
+        self.chain = chain
+        self.callback = _OnRetrieve()
+        self.documents: List[Any] = []
+
+    def invoke(self, payload: Dict[str, str]) -> Dict[str, Any]:
+        self.documents = []
+        result = self.chain.invoke(payload, config={"callbacks": [self.callback]})
+        if (result or {}).get("source_documents"):
+            self.documents = list(result["source_documents"])
+        return result
 
 
 # --------------------------------------------------------------------------
@@ -244,19 +297,50 @@ class Run:
     stopped_at_cap: bool = False
 
 
+def case_row(case, outcome: AuditOutcome, passages: List[Any], calls: int,
+             tokens, seconds: float) -> Dict[str, Any]:
+    """One --cases-out record. Rule reasons are the list passed to the engine."""
+    errored = outcome.verdict is Verdict.ERROR or outcome.error_detail is not None
+    return {
+        "id": case["id"],
+        "category": case["category"],
+        "expected": case["expected_verdict"],
+        "returned": Verdict.ERROR.value if errored else outcome.verdict.value,
+        "confidence": outcome.confidence,
+        "reasoning": outcome.reviewer_note or None,
+        "error_detail": outcome.error_detail,
+        "rule_reasons": case["rule_reasons"],
+        "passages_retrieved": len(passages),
+        "passage_ids": [passage_id(doc) for doc in passages],
+        "model_calls": calls,
+        "input_tokens": tokens[0] if tokens else None,
+        "output_tokens": tokens[1] if tokens else None,
+        "seconds": round(seconds, 3),
+    }
+
+
 def _is_cap_failure(outcome: AuditOutcome) -> bool:
     return bool(outcome.error_detail) and CallCapReached.__name__ in outcome.error_detail
 
 
-def run_cases(cases, engine, rag_engine, budget: CallBudget, fake: Optional[FakeLLM] = None) -> Run:
-    """Assess each case in order; stop cleanly when the call budget runs out."""
+def run_cases(cases, engine, rag_engine, budget: CallBudget, fake: Optional[FakeLLM] = None,
+              meter=None, cases_out: Optional[TextIO] = None, progress: bool = False) -> Run:
+    """Assess each case in order; stop cleanly when the call budget runs out.
+
+    With cases_out, each finished case is written as one JSON line and
+    flushed before the next case starts.
+    """
     run = Run(total_cases=len(cases))
+    recorder = PassageRecorder(rag_engine) if rag_engine is not None else None
     for case in cases:
         if budget.exhausted:
             run.stopped_at_cap = True
             break
         if fake is not None:
             fake.case = case
+        calls_before = budget.used
+        tokens_before = (meter.input_tokens, meter.output_tokens) if meter is not None else None
+        started = time.perf_counter()
         txn = case["transaction"]
         outcome = engine.assess_transaction(
             transaction_id=case["id"],
@@ -265,18 +349,33 @@ def run_cases(cases, engine, rag_engine, budget: CallBudget, fake: Optional[Fake
             sender=txn["sender"],
             receiver=txn["receiver"],
             rule_reasons=case["rule_reasons"],
-            rag_engine=rag_engine,
+            rag_engine=recorder,
         )
+        seconds = time.perf_counter() - started
         if _is_cap_failure(outcome):
             # Cut off by the cap, not a verdict: dropped from the results.
             run.stopped_at_cap = True
             break
-        run.results.append(CaseResult(
+        result = CaseResult(
             case_id=case["id"], category=case["category"], expected=case["expected_verdict"],
             verdict=outcome.verdict.value,
             errored=outcome.verdict is Verdict.ERROR or outcome.error_detail is not None,
             error_detail=outcome.error_detail,
-        ))
+        )
+        run.results.append(result)
+        if cases_out is not None:
+            tokens = None
+            if tokens_before is not None:
+                spent = (meter.input_tokens - tokens_before[0], meter.output_tokens - tokens_before[1])
+                tokens = spent if any(spent) else None  # provider reported no usage
+            row = case_row(case, outcome, recorder.documents if recorder else [],
+                           budget.used - calls_before, tokens, seconds)
+            cases_out.write(json.dumps(row, ensure_ascii=False) + "\n")
+            cases_out.flush()
+        if progress:
+            returned = "ERROR" if result.errored else result.verdict
+            print(f"{result.case_id:<8} expected {result.expected:<10} returned {returned:<10} "
+                  f"{seconds:6.2f}s", flush=True)
     run.calls = budget.used
     return run
 
@@ -378,6 +477,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help=f"cap on model calls including retries (default {DEFAULT_LIVE_MAX_CALLS} "
                              "with --live, none for fakes)")
     parser.add_argument("--out", type=Path, default=None, help="also write the report as markdown")
+    parser.add_argument("--cases-out", type=Path, default=None,
+                        help="append one JSON row per finished case to this JSONL file")
     parser.add_argument("--price-in", type=float, default=None, help="USD per million input tokens")
     parser.add_argument("--price-out", type=float, default=None, help="USD per million output tokens")
     args = parser.parse_args(argv)
@@ -398,7 +499,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         engine, rag_engine, fake = build_fake(args.fake, budget)
         label = f"fake model, {args.fake}"
 
-    run = run_cases(cases, engine, rag_engine, budget, fake=fake)
+    cases_out = None
+    if args.cases_out:
+        args.cases_out.parent.mkdir(parents=True, exist_ok=True)
+        cases_out = args.cases_out.open("a", encoding="utf-8")
+    try:
+        run = run_cases(cases, engine, rag_engine, budget, fake=fake, meter=meter,
+                        cases_out=cases_out, progress=True)
+    finally:
+        if cases_out is not None:
+            cases_out.close()
+    print()
     metrics = score(run.results)
     lines = report_lines(run, metrics, label)
     if args.live:
@@ -409,6 +520,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.out:
         args.out.write_text(text + "\n", encoding="utf-8")
         print(f"\nWrote {args.out}")
+    if args.cases_out:
+        print(f"Appended {len(run.results)} case rows to {args.cases_out}")
 
     if metrics["errored_as_clear"]:
         print(f"\nFAILED: errored reviews counted as CLEAR: {metrics['errored_as_clear']}")
