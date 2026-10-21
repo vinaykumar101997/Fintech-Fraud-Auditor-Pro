@@ -18,7 +18,27 @@ def env_flag(name: str, default: bool) -> bool:
         return default
     return raw.strip().lower() not in {"0", "false", "no", "off"}
 
+
+def load_env_file(path: Path) -> None:
+    """Load a .env file into os.environ without overriding variables already set.
+
+    Skipped when FFAV_SKIP_DOTENV is on (the test suite sets it, so a
+    developer's local .env cannot change test results) or when python-dotenv
+    is not installed.
+    """
+    if env_flag("FFAV_SKIP_DOTENV", False):
+        return
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    load_dotenv(path, override=False)
+
+
 PROJECT_ROOT = Path(__file__).resolve().parent
+# Before any setting below is read, so scripts that only import config
+# (e.g. scripts/ingest_pdf.py) see the repo-root .env.
+load_env_file(PROJECT_ROOT / ".env")
 DATA_DIR = PROJECT_ROOT / "data"
 AUDIT_DB_PATH = Path(os.getenv("AUDIT_DB_PATH", DATA_DIR / "audit_log.sqlite3"))
 SANCTIONS_CSV = DATA_DIR / "sanctions_list.csv"
