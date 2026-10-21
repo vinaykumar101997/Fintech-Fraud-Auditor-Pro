@@ -25,9 +25,28 @@ class ProviderConfigError(RuntimeError):
     """Raised when a provider is selected but not usable. Never swallowed."""
 
 
+# Retries: utils.retry.call_with_retry (LLM_MAX_RETRIES) is the only retry
+# layer. Left at their defaults, the SDKs retry inside each call as well
+# (botocore's own retry handler, the Vertex client up to 6 retries), so one
+# call could make many attempts, none of them visible in logs or call counts.
+# Every client below is therefore built to make exactly one attempt per call.
+VERTEX_MAX_RETRIES = 0
+# botocore's retries["max_attempts"] counts retries AFTER the first request,
+# not total attempts: checked against a local HTTP 429 server, 1 sent two
+# requests per converse() call and 0 sent exactly one.
+BEDROCK_MAX_RETRIES = 0
+
+
 # --------------------------------------------------------------------------
 # Bedrock
 # --------------------------------------------------------------------------
+def _bedrock_client_config() -> Any:
+    """botocore Config making one HTTP request per call (no SDK-level retries)."""
+    from botocore.config import Config
+
+    return Config(retries={"max_attempts": BEDROCK_MAX_RETRIES, "mode": "standard"})
+
+
 def _bedrock_chat() -> Any:
     try:
         from langchain_aws import ChatBedrockConverse
@@ -44,6 +63,7 @@ def _bedrock_chat() -> Any:
         region_name=config.AWS_REGION,
         temperature=config.LLM_TEMPERATURE,
         max_tokens=config.LLM_MAX_TOKENS,
+        config=_bedrock_client_config(),
     )
 
 
@@ -57,6 +77,7 @@ def _bedrock_embeddings() -> Any:
         model_id=config.BEDROCK_EMBED_MODEL_ID,
         region_name=config.AWS_REGION,
         model_kwargs={"dimensions": config.EMBEDDING_DIMENSIONS},
+        config=_bedrock_client_config(),
     )
 
 
@@ -77,6 +98,7 @@ def _vertex_chat() -> Any:
         project=config.GCP_PROJECT_ID,
         location=config.GCP_LOCATION,
         temperature=config.LLM_TEMPERATURE,
+        max_retries=VERTEX_MAX_RETRIES,
     )
 
 
@@ -90,6 +112,7 @@ def _vertex_embeddings() -> Any:
         model_name=config.VERTEX_EMBED_MODEL,
         project=config.GCP_PROJECT_ID,
         location=config.GCP_LOCATION,
+        max_retries=VERTEX_MAX_RETRIES,
     )
 
 
