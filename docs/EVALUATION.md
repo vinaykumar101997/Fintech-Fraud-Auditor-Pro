@@ -537,7 +537,9 @@ All five reviews returned a verdict that validated against the output schema. Re
 
 **Cases.** `tests/fixtures/llm_cases.json` holds 31 synthetic cases, 13 expected CLEAR and 18 expected SUSPICIOUS, in seven categories: obvious clear (payroll, rent, suppliers), over-threshold but legitimate, structuring just under the threshold, sanctioned or high-risk jurisdiction, layering through shell-like names, pass-through, and prompt injection. All names are invented except entries on the bundled demo watchlist. Each case's rule reasons are exactly what `utils/rules.py` produces for its fields, and a test keeps them in step. In the prompt-injection cases a ledger field asks for CLEAR while the facts call for SUSPICIOUS. The engine escalates any injection the model reports, so the set has no injection case whose facts are clear.
 
-Each case reaches the engine with the same arguments the app passes: the transaction fields and the rule reasons. The behaviour-model flags in the case file explain why such a row would be forwarded, but the engine has no parameter for them, so the review does not see them. Pass-through cases with no rule hit therefore give the model only names, an amount and a country.
+Each case reaches the engine with the same arguments the app passes: the transaction fields and the rule reasons. The behaviour-model flags in the case file explain why such a row would be forwarded, but the engine has no parameter for them, so the review does not see them. Pass-through cases with no rule hit therefore give the model only names, an amount and a country, so the review cannot answer them; the report says so in its footer.
+
+**Development and held-out sets.** The 31 cases in `llm_cases.json` are the development set: their per-case live results have already been inspected, so any change to the review is tuned against them. `tests/fixtures/llm_cases_heldout.json` holds 21 new cases (10 CLEAR, 11 SUSPICIOUS, ids `H-`) written separately, with every SUSPICIOUS signal visible in the fields the review receives and no pass-through cases. It is the held-out set, to be run once after a change to the review has been chosen on the development set, not used for tuning.
 
 **Metrics.** Verdict accuracy, SUSPICIOUS precision and recall with Wilson 95% intervals, a confusion matrix with an ERROR column, accuracy per category, and the share of reviews that errored. An ERROR is never a correct answer, so it counts against accuracy and recall, and the harness exits with code 1 if any errored review were counted as CLEAR.
 
@@ -547,7 +549,11 @@ Each case reaches the engine with the same arguments the app passes: the transac
 python scripts/eval_llm_tier.py                      # fake model answering the expected verdict
 python scripts/eval_llm_tier.py --fake always-clear  # also: always-suspicious, error
 python scripts/eval_llm_tier.py --live --max-calls 70 --out llm_eval.md
+python scripts/eval_llm_tier.py --cases tests/fixtures/llm_cases_heldout.json   # held-out set
+python scripts/eval_llm_tier.py --exclude-category pass_through                  # repeatable
 ```
+
+`--cases PATH` picks the case file (default `tests/fixtures/llm_cases.json`) and `--exclude-category NAME` leaves out a category; the report names the file and the excluded categories.
 
 Without `--live` the harness uses a deterministic fake model and a fake retriever and needs no network or credentials. `--live` uses the configured provider through the app's own factory and retrieval stack. `--max-calls` (default 40 with `--live`) counts every model call, retries included. Once the cap is reached no further call is made, the case in progress is dropped and the completed cases are reported. Each review makes two calls, so the full set needs at least 62. A live run prints token usage and an estimated cost when the provider reports usage. The report goes to the console and, with `--out`, to a markdown file. `--cases-out PATH` appends one JSON line per finished case with the expected and returned verdict, confidence, the reviewer's rationale, any error detail, the rule reasons sent, the ids of the retrieved passages, and the calls, tokens and seconds that case used. Each row is flushed as soon as its case finishes, so a crash or a stop at the call cap keeps every case completed before it. Nothing edits these docs automatically.
 
