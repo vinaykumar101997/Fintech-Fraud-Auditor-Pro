@@ -1,5 +1,7 @@
 .env
 *.json
+# Labelled cases for scripts/eval_llm_tier.py; only this fixture is exempt.
+!tests/fixtures/llm_cases.json
 !package.json
 gcp-key*.json
 .aws/
