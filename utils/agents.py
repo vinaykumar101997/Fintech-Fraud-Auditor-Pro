@@ -134,6 +134,7 @@ class ComplianceAuditEngine:
                     confidence=max(assessment.confidence, 0.9),
                     typology="data manipulation attempt",
                     initial_finding=finding,
+                    reviewer_note=assessment.rationale,
                 )
 
             return AuditOutcome(
