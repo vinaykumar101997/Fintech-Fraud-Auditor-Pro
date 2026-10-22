@@ -51,23 +51,34 @@ These are small, author-written sets, so they show gross failures rather than pr
 All stages run inside the Streamlit app (`app.py`), starting from a ledger CSV that is loaded and schema-checked with Decimal amounts.
 
 ```mermaid
-%%{init: {"flowchart": {"rankSpacing": 20, "nodeSpacing": 24, "wrappingWidth": 420}}}%%
+%%{init: {"flowchart": {"rankSpacing": 14, "nodeSpacing": 24, "wrappingWidth": 420}}}%%
 flowchart TB
-    RULES["Tier 1: rules and sanctions screening"] -->|"all rows, with rule flags"| ML["Tier 0: behaviour features and Isolation Forest"]
+    RULES["Rules and sanctions screening"] -->|"all rows, with rule flags"| ML["Behaviour model: features and Isolation Forest"]
     ML -->|"rule flag and anomaly flag"| MERGE{{"Merge of flags"}}
+    MERGE -->|"rule hit or anomaly"| LLM["LLM review with Qdrant retrieval"]
     MERGE -->|"neither"| DROP["Not forwarded"]
-    MERGE -->|"rule hit or anomaly"| LLM["Tier 2: LLM review with Qdrant retrieval"]
     LLM -->|"structured output"| VERD["Schema-validated verdict: SUSPICIOUS, CLEAR or ERROR"]
     VERD -->|"SUSPICIOUS rows"| OFF["Officer review"]
-    VERD -->|"every verdict"| DB[("SQLite audit log")]
-    OFF -->|"named decision"| DB
-    DB -->|"latest decision is approve"| SAR["SAR draft"]
-    VERD -->|"row chosen by analyst"| CYC["Tier 3: graph cycle detection"]
+    VERD -->|"row chosen by analyst"| CYC["Graph cycle detection"]
     CYC -->|"risk score"| GATE{{"LangGraph gate: score 70 or above?"}}
-    GATE -->|"no"| SUM["Forensic summary"]
     GATE -->|"yes, paused"| HUM["Human approval"]
-    HUM -->|"approve"| SUM
+    GATE -->|"no"| SUM["Forensic summary"]
+    OFF -->|"named decision"| DB[("SQLite audit log")]
+    HUM -->|"named decision"| DB
     HUM -->|"reject"| ESC["Escalated, no filing"]
+    HUM -->|"approve"| SUM
+    DB -->|"SUSPICIOUS row, latest decision is approve"| SAR["SAR draft"]
+
+    classDef auto fill:#E3ECFA,stroke:#3B6FB6,color:#111111
+    classDef decision fill:#FDF1D3,stroke:#B7791F,color:#111111
+    classDef human fill:#DFF3E4,stroke:#2F855A,color:#111111
+    classDef store fill:#ECE4F7,stroke:#6B46C1,color:#111111
+    classDef endstate fill:#EEF0F2,stroke:#5F6B7A,color:#111111
+    class RULES,ML,LLM,VERD,CYC auto
+    class MERGE,GATE decision
+    class OFF,HUM human
+    class DB store
+    class DROP,ESC,SUM,SAR endstate
 ```
 
 Sanctions hits, forwarded rows, verdicts, officer and approval decisions and SAR drafts are all written to the SQLite audit log. A SAR can be drafted only for a SUSPICIOUS row whose latest recorded human decision, from officer review or from the topology gate, is an approval.
