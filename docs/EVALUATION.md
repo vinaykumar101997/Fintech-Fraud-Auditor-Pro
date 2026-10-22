@@ -621,6 +621,26 @@ In run 1 one review failed after four attempts because the model called a built-
 - Runs: the set is run once with the current prompt and once with the prompt from commit 3e01746 (change 1, with the escalate-on-ambiguity sentence still present). The second run uses a copy of that commit exported with `git archive` into a temporary directory outside the working tree; the working tree is not changed.
 - Decision rule: for both prompts, report SUSPICIOUS cases flagged out of 12 and clean controls cleared out of 8. If the current prompt flags at least 3 fewer of the 12 than the prompt with the sentence, the removal is judged unsafe, and a narrower rule (escalate on ambiguity only when the record shows a high-risk jurisdiction, a politically exposed person or a structuring pattern) is tested next on the development set and then on this set again. If the difference is 2 or fewer and the current prompt clears at least 6 of the 8 controls, the current prompt stays as the default. If the current prompt clears fewer than 6 of the 8 controls, it is judged to over-flag, whatever the difference in flags, and is not made the default. Results are reported whatever they are.
 
+**Third case set result (single run per prompt).**
+
+- Setup: the 20 cases were run once with the current prompt (A) and once with the prompt of commit 3e01746, which has the escalate-on-ambiguity sentence (B). No code or prompt changes were made between or after the runs.
+
+| | A: current prompt | B: commit 3e01746 |
+|---|---|---|
+| SUSPICIOUS flagged | 11/12 | 12/12 |
+| Clean controls cleared | 7/8 | 3/8 |
+| Errored reviews | 0 | 0 |
+| Model calls | 40 | 40 |
+| Output tokens | 18,389 | 18,025 |
+| Estimated cost | about $0.06 | about $0.06 |
+| Average time per case | 23.0 s | 29.6 s |
+| Cases over 100 s | none | N-07 (129 s) |
+
+- Differences: N-09 (a numbered collector paying a crypto ATM) was missed by A and caught by B; N-15, N-18, N-19 and N-20, all clean, were wrongly flagged by B only. N-13 (the solicitor's client account) was flagged by both.
+- Rationale themes: A's miss on N-09 said the record was a single payment with no rule hits and insufficient evidence, without engaging with the collector name or the crypto exit. B's false alarms cited missing legal-entity information, a shared surname read as self-dealing, a crypto exchange as inherently elevated risk, and a country and sector as historically higher risk.
+- Outcome under the pre-registered rule: A flags 1 fewer than B (the removal is judged unsafe at 3 or more) and clears 7 of 8 controls (at least 6 needed), so the current prompt stays the default. This is read as no evidence of harm, not as proof of safety: there was one run per prompt, the prompts are one case apart, 11/12 has a Wilson 95% interval of about 65% to 99%, and the set has 20 cases written and labelled by the author after the earlier results were known.
+- Open: N-13 is flagged by both prompts, so the solicitor's client-account pattern remains a false positive; any change aimed at it is tested on the development set first, and the held-out set is not reused for tuning. The review does not receive the behaviour-model flags, so the pass_through category stays unanswerable.
+
 **Limits.**
 
 - The expected verdicts were written by the project author and have not been independently annotated.
