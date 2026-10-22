@@ -1,0 +1,293 @@
+{
+  "description": "Synthetic labelled cases for scripts/eval_llm_tier.py in which no SUSPICIOUS case has a rule reason: the suspicion has to be read from the names, jurisdiction and amount in the record. Eight CLEAR controls look ambiguous but are legitimate. Labels were fixed before any model saw the cases. All names are invented. rule_reasons are the output of utils.rules.evaluate_row for the transaction fields.",
+  "cases": [
+    {
+      "id": "N-01",
+      "category": "layering_shell",
+      "expected_verdict": "SUSPICIOUS",
+      "transaction": {
+        "amount": "7000.00",
+        "country": "United Kingdom",
+        "sender": "Sterling Apex Holdings 44 Ltd",
+        "receiver": "Sterling Apex Holdings 45 Ltd"
+      },
+      "rule_reasons": [],
+      "behaviour_flags": [],
+      "note": "Round sum between numbered sibling companies with generic names; there is no trading reason for one shelf company to pay its twin. A reviewer should notice the near-identical numbered names."
+    },
+    {
+      "id": "N-02",
+      "category": "layering_shell",
+      "expected_verdict": "SUSPICIOUS",
+      "transaction": {
+        "amount": "6500.00",
+        "country": "Liechtenstein",
+        "sender": "Meridian Nominee Directors Ltd",
+        "receiver": "Oakwell Bearer Holdings AG"
+      },
+      "rule_reasons": [],
+      "behaviour_flags": [],
+      "note": "A nominee-director company paying a bearer-share holding company hides who owns both ends. A reviewer should notice 'nominee' and 'bearer' in the names; the jurisdiction is not on the rules' lists."
+    },
+    {
+      "id": "N-03",
+      "category": "high_risk_jurisdiction",
+      "expected_verdict": "SUSPICIOUS",
+      "transaction": {
+        "amount": "5600.00",
+        "country": "Yemen",
+        "sender": "Bramwell Marine Spares Ltd",
+        "receiver": "Hadhramawt Coastal Supplies Est"
+      },
+      "rule_reasons": [],
+      "behaviour_flags": [],
+      "note": "Payment into a jurisdiction under FATF increased monitoring that the rules' high-risk list does not include. A reviewer should notice the jurisdiction even though no rule fired."
+    },
+    {
+      "id": "N-04",
+      "category": "high_risk_jurisdiction",
+      "expected_verdict": "SUSPICIOUS",
+      "transaction": {
+        "amount": "7250.00",
+        "country": "South Sudan",
+        "sender": "Fenwick Field Logistics Ltd",
+        "receiver": "Upper Nile Contracting Co"
+      },
+      "rule_reasons": [],
+      "behaviour_flags": [],
+      "note": "Payment into a jurisdiction under FATF increased monitoring and conflict risk that the rules do not list. A reviewer should notice the jurisdiction even though no rule fired."
+    },
+    {
+      "id": "N-05",
+      "category": "high_risk_jurisdiction",
+      "expected_verdict": "SUSPICIOUS",
+      "transaction": {
+        "amount": "6000.00",
+        "country": "Moldova",
+        "sender": "Calloway Advisory Ltd",
+        "receiver": "Deputy Minister Teodor Ralescu"
+      },
+      "rule_reasons": [],
+      "behaviour_flags": [],
+      "note": "Round payment from an advisory firm to a serving deputy minister personally: a politically exposed person receiving private funds. A reviewer should notice the PEP title in the beneficiary name."
+    },
+    {
+      "id": "N-06",
+      "category": "high_risk_jurisdiction",
+      "expected_verdict": "SUSPICIOUS",
+      "transaction": {
+        "amount": "7900.00",
+        "country": "Kazakhstan",
+        "sender": "Brightwater Consulting LLP",
+        "receiver": "Governor Sevrin Malacko Family Trust"
+      },
+      "rule_reasons": [],
+      "behaviour_flags": [],
+      "note": "Consultancy money into the family trust of a regional governor: a PEP behind a trust. A reviewer should notice the PEP title and the trust wrapper."
+    },
+    {
+      "id": "N-07",
+      "category": "layering_shell",
+      "expected_verdict": "SUSPICIOUS",
+      "transaction": {
+        "amount": "7500.00",
+        "country": "United Kingdom",
+        "sender": "Zentrix Global Trading FZE",
+        "receiver": "Amira Haddad Student Account"
+      },
+      "rule_reasons": [],
+      "behaviour_flags": [],
+      "note": "A round, large credit from a free-zone trading company into a student account, a typical money-mule recruitment pattern. A reviewer should notice the account type does not fit the payer or the size."
+    },
+    {
+      "id": "N-08",
+      "category": "layering_shell",
+      "expected_verdict": "SUSPICIOUS",
+      "transaction": {
+        "amount": "6000.00",
+        "country": "United Kingdom",
+        "sender": "Holloway Junior Football Club",
+        "receiver": "Orion Prepaid Gift Cards Ltd"
+      },
+      "rule_reasons": [],
+      "behaviour_flags": [],
+      "note": "A children's sports club spending a round 6,000 on prepaid gift cards, which are easy to move value through. A reviewer should notice the mismatch between account type and activity."
+    },
+    {
+      "id": "N-09",
+      "category": "layering_shell",
+      "expected_verdict": "SUSPICIOUS",
+      "transaction": {
+        "amount": "4950.00",
+        "country": "United States",
+        "sender": "Field Agent 17 Collections",
+        "receiver": "Brightline Crypto ATM Ltd"
+      },
+      "rule_reasons": [],
+      "behaviour_flags": [],
+      "note": "A numbered collection agent paying a crypto ATM operator: collected funds pushed straight out into crypto. A reviewer should notice the collector name and the cash-to-crypto exit."
+    },
+    {
+      "id": "N-10",
+      "category": "layering_shell",
+      "expected_verdict": "SUSPICIOUS",
+      "transaction": {
+        "amount": "7800.00",
+        "country": "United Arab Emirates",
+        "sender": "Petal and Stem Florists",
+        "receiver": "Aurum Bullion Refinery DMCC"
+      },
+      "rule_reasons": [],
+      "behaviour_flags": [],
+      "note": "A high-street florist buying from a bullion refinery has no business reason; goods mismatch is a trade-based laundering sign. A reviewer should notice the sector mismatch."
+    },
+    {
+      "id": "N-11",
+      "category": "layering_shell",
+      "expected_verdict": "SUSPICIOUS",
+      "transaction": {
+        "amount": "7700.00",
+        "country": "Cyprus",
+        "sender": "Margaret Coyle Pension Drawdown",
+        "receiver": "Elite Forex Recovery Services"
+      },
+      "rule_reasons": [],
+      "behaviour_flags": [],
+      "note": "Pension money sent to a 'recovery' firm, the classic second stage of an investment scam. A reviewer should notice the recovery-service name and the pension source."
+    },
+    {
+      "id": "N-12",
+      "category": "layering_shell",
+      "expected_verdict": "SUSPICIOUS",
+      "transaction": {
+        "amount": "6200.00",
+        "country": "Estonia",
+        "sender": "Corvin Data Services OU",
+        "receiver": "Blendr Coin Mixing Service"
+      },
+      "rule_reasons": [],
+      "behaviour_flags": [],
+      "note": "A company paying a coin-mixing service, whose only purpose is to break the trail between where crypto comes from and where it goes. A reviewer should notice the mixing service named as beneficiary; it is not on the sanctions list, so no rule fires."
+    },
+    {
+      "id": "N-13",
+      "category": "over_threshold_legitimate",
+      "expected_verdict": "CLEAR",
+      "transaction": {
+        "amount": "285000.00",
+        "country": "United Kingdom",
+        "sender": "Daniel and Ruth Ashworth",
+        "receiver": "Pemberton Hale Solicitors Client Account"
+      },
+      "rule_reasons": [
+        "Value 285,000.00 is at or above the 10,000 reporting threshold."
+      ],
+      "behaviour_flags": [],
+      "note": "Private buyers paying their conveyancing solicitor's client account for a house purchase, the normal route for a completion. Looks like the ambiguous client-account pattern but has an ordinary payer."
+    },
+    {
+      "id": "N-14",
+      "category": "over_threshold_legitimate",
+      "expected_verdict": "CLEAR",
+      "transaction": {
+        "amount": "84320.00",
+        "country": "United Kingdom",
+        "sender": "Harlow Precision Engineering Ltd",
+        "receiver": "Bacsline Payroll Bureau Ltd"
+      },
+      "rule_reasons": [
+        "Value 84,320.00 is at or above the 10,000 reporting threshold."
+      ],
+      "behaviour_flags": [],
+      "note": "A manufacturer funding its monthly payroll run through a payroll bureau. Large, but the payer and payee fit the amount."
+    },
+    {
+      "id": "N-15",
+      "category": "over_threshold_legitimate",
+      "expected_verdict": "CLEAR",
+      "transaction": {
+        "amount": "395000.00",
+        "country": "United Kingdom",
+        "sender": "Northfield Housing Association",
+        "receiver": "Kestrel Homes Ltd"
+      },
+      "rule_reasons": [
+        "Value 395,000.00 is at or above the 10,000 reporting threshold."
+      ],
+      "behaviour_flags": [],
+      "note": "A housing association completing a purchase of new-build homes from the developer. Large, but the parties and the size fit."
+    },
+    {
+      "id": "N-16",
+      "category": "obvious_clear",
+      "expected_verdict": "CLEAR",
+      "transaction": {
+        "amount": "6840.00",
+        "country": "Denmark",
+        "sender": "Corran Furniture Ltd",
+        "receiver": "Nordvik Wood Components ApS"
+      },
+      "rule_reasons": [],
+      "behaviour_flags": [],
+      "note": "Cross-border invoice from a furniture maker to a component supplier in a low-risk country."
+    },
+    {
+      "id": "N-17",
+      "category": "over_threshold_legitimate",
+      "expected_verdict": "CLEAR",
+      "transaction": {
+        "amount": "25000.00",
+        "country": "United Kingdom",
+        "sender": "Ellison Family Foundation",
+        "receiver": "Riverside Food Bank CIO"
+      },
+      "rule_reasons": [
+        "Value 25,000.00 is at or above the 10,000 reporting threshold."
+      ],
+      "behaviour_flags": [],
+      "note": "A family foundation making a grant to a registered charity. Foundations and round sums look ambiguous, but grant-making is what the payer exists for."
+    },
+    {
+      "id": "N-18",
+      "category": "obvious_clear",
+      "expected_verdict": "CLEAR",
+      "transaction": {
+        "amount": "5000.00",
+        "country": "United Kingdom",
+        "sender": "Corbel Studio Ltd",
+        "receiver": "Hannah Corbel"
+      },
+      "rule_reasons": [],
+      "behaviour_flags": [],
+      "note": "A small company paying a round dividend to its director, whose surname is the company name. Round sum to a person, but the relationship is plain."
+    },
+    {
+      "id": "N-19",
+      "category": "obvious_clear",
+      "expected_verdict": "CLEAR",
+      "transaction": {
+        "amount": "250.00",
+        "country": "United Kingdom",
+        "sender": "Tomas Reyes",
+        "receiver": "Coinvault Exchange Ltd"
+      },
+      "rule_reasons": [],
+      "behaviour_flags": [],
+      "note": "A person buying a small amount of crypto through an exchange. Crypto looks ambiguous, but the size and direction are ordinary retail use."
+    },
+    {
+      "id": "N-20",
+      "category": "obvious_clear",
+      "expected_verdict": "CLEAR",
+      "transaction": {
+        "amount": "7450.00",
+        "country": "United Arab Emirates",
+        "sender": "Brindle Textiles Ltd",
+        "receiver": "Al Noor Fabrics Trading LLC"
+      },
+      "rule_reasons": [],
+      "behaviour_flags": [],
+      "note": "A textile firm paying a fabric trader abroad; the goods match the payer's business."
+    }
+  ]
+}
