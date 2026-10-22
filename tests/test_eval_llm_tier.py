@@ -27,6 +27,8 @@ from utils.rules import evaluate_row  # noqa: E402
 from utils.screening import rule_screener  # noqa: E402
 
 CASES = harness.load_cases()
+# Suspicious cases with no rule reason; loading it checks the schema.
+NORULE = harness.load_cases(ROOT / "tests" / "fixtures" / "llm_cases_norule.json")
 
 
 @pytest.fixture(autouse=True)
@@ -67,18 +69,20 @@ def test_category_labels_are_consistent():
             assert "CLEAR" in " ".join(case["transaction"].values()), case["id"]
 
 
-def test_rule_reasons_match_the_rules_engine():
-    for case in CASES:
+@pytest.mark.parametrize("cases", [CASES, NORULE], ids=["development", "norule"])
+def test_rule_reasons_match_the_rules_engine(cases):
+    for case in cases:
         txn = case["transaction"]
         result = evaluate_row(amount=Decimal(txn["amount"]), country=txn["country"],
                               sender=txn["sender"], receiver=txn["receiver"], screener=rule_screener)
         assert case["rule_reasons"] == result.reasons, case["id"]
 
 
-def test_only_demo_watchlist_names_match_the_sanctions_list():
+@pytest.mark.parametrize("cases", [CASES, NORULE], ids=["development", "norule"])
+def test_only_demo_watchlist_names_match_the_sanctions_list(cases):
     with config.SANCTIONS_CSV.open(encoding="utf-8") as fh:
         watchlisted = {row["name"] for row in csv.DictReader(fh)}
-    for case in CASES:
+    for case in cases:
         for party in ("sender", "receiver"):
             name = case["transaction"][party]
             if rule_screener(name):
