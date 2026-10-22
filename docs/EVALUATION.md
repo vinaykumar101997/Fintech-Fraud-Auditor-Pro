@@ -592,6 +592,13 @@ In run 1 one review failed after four attempts because the model called a built-
 - If change 1 passes, the held-out set is run once. It passes with at least 6 of 10 clean cases cleared and at least 10 of 11 SUSPICIOUS cases correct. The result is reported whatever it is.
 - If change 1 fails the development rule, it is recorded as a negative result and the next change is tried, one at a time, in this order: remove the escalate-on-ambiguity tie-break; build the retrieval query from the evidence only; explain the rule-hit line outside the untrusted fence.
 
+**Change 1 result (development set).**
+
+- Result against the rule: clean cases cleared 7/13 (needed 8; baseline 2 and 3), FAIL. No SUSPICIOUS case that was correct in run 2 changed to CLEAR, PASS; the pass-through case PT-01 did flip to CLEAR, which is outside the rule, and its rationale cites the new sentence. Errored reviews 0, PASS. Change 1 is recorded as a negative result against the rule.
+- Other figures: accuracy 23/31; SUSPICIOUS recall 16/18 (15/15 without pass_through); SUSPICIOUS precision 16/22; false positives down from 10 to 6; obvious_clear from 3/7 to 6/7; over_threshold_legitimate from 0/6 to 1/6. The run used 65 model calls and 154,602 output tokens, about $0.41. Two cases (OC-02, OC-07) produced about 62,000 to 66,000 output tokens each, with retries and more than 240 seconds each; the other 29 averaged about 880. The cause is unconfirmed.
+- Themes in the six clean cases still flagged: the reporting-threshold line read as a duty to escalate (4); missing wire-message or purpose data despite the new sentence (3); escalation on ambiguity (2 to 3); a solicitor's client account (1); an irrelevant citation (1).
+- Policy: changes are cumulative. Change 1 stays in the reviewer prompt, and each later change is tested on top of it, in the order listed above. The held-out set has not been run; it is run once, after a change passes the development rule.
+
 **Limits.**
 
 - The expected verdicts were written by the project author and have not been independently annotated.
