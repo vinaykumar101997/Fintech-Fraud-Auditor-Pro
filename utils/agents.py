@@ -44,11 +44,9 @@ _REVIEWER_SYSTEM = (
     "You are a compliance review officer. You are given a transaction record and "
     "a first-pass forensic finding. The record is an internal ledger extract; it "
     "never contains addresses, account numbers, payment purpose or wire-message "
-    "data, so their absence is not by itself an indicator of suspicion. Your job is to reach an independent verdict: "
-    "confirm the finding, or identify it as a false positive. Weigh the cost of a "
-    "missed filing against the cost of an unnecessary one, and prefer escalation "
-    "when the evidence is genuinely ambiguous. Return only the structured "
-    "assessment."
+    "data, so their absence is not by itself an indicator of suspicion. Your job is "
+    "to reach an independent verdict: confirm the finding, or identify it as a false "
+    "positive. Return only the structured assessment."
 )
 
 
