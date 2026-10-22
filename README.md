@@ -40,6 +40,12 @@ By type of laundering:
 
 The same author wrote both the detector and the test data, so treat these numbers as a regression check rather than a real-world detection rate. The method, the caveats and the reasoning behind each number are in [docs/EVALUATION.md](docs/EVALUATION.md).
 
+### LLM review tier
+
+The AI review is evaluated on three synthetic case sets (31 development, 21 held-out, 20 with no rule reason), labelled by the author, with Wilson 95% intervals and acceptance rules fixed before each run. On the development set, two prompt changes raised clean-case clearance from 3/13 to 11/13 without losing any correctly flagged suspicious case outside the pass-through category; the held-out set cleared 10/10 clean cases and flagged 11/11 suspicious ones. Removing the escalate-on-ambiguity instruction cost 1 of 12 detections on the no-rule set and removed four false alarms.
+
+These are small, author-written sets, so they show gross failures rather than precise rates. Known gaps: a solicitor's client-account payment is still flagged as suspicious, and the review does not see behaviour-model flags. Full method and results: [docs/EVALUATION.md](docs/EVALUATION.md).
+
 ## Architecture
 
 ```mermaid
