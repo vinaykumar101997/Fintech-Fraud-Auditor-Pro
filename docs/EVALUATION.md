@@ -607,6 +607,13 @@ In run 1 one review failed after four attempts because the model called a built-
 - Limits: this is one run, so the improvement from 7 to 11 is larger than the documented noise but not replicated. PT-01, a pass-through case flagged correctly in run 2 without the review being able to see its signal, is CLEAR again. Every SUSPICIOUS case in both case sets has a rule reason, so neither set measures what removing the escalate-on-ambiguity sentence costs on suspicious cases without a rule hit; a third case set for that is needed before this prompt is treated as the default.
 - Next: the held-out set is run once with this prompt, under the acceptance rule above, and the result is reported whatever it is.
 
+**Held-out result (single run).**
+
+- Run once with the change 2 prompt on the 21 held-out cases, with no code or prompt changes afterwards. Against the rule: clean cases cleared 10/10 (needed 6), PASS; SUSPICIOUS cases correct 11/11 (needed 10), PASS; errored reviews 0.
+- Figures: accuracy 21/21 (Wilson 95% CI 85% to 100%); SUSPICIOUS recall 11/11 and precision 11/11 (CI 74% to 100% each); the clean-case rate of 10/10 has a lower bound of about 72%. The run used 42 model calls and 19,589 output tokens, about $0.06, and took 17.8 seconds per case on average; no case took over 100 seconds or produced over 5,000 output tokens.
+- How to read it: the held-out cases were written after the development failures had been inspected, by the author who also labelled them; they leave out the ambiguous solicitor's client-account pattern; and every SUSPICIOUS case has a rule reason. The run therefore shows a reduction in false positives on unseen clean cases. It does not show detection of suspicious cases without a rule hit, and it does not show that removing the escalate-on-ambiguity sentence is safe for them. The prompt is not validated for that case.
+- Open: a third case set of suspicious cases without a rule reason, written and committed before it is run, is needed before the current prompt is treated as the default.
+
 **Limits.**
 
 - The expected verdicts were written by the project author and have not been independently annotated.
