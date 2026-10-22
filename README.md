@@ -48,34 +48,34 @@ These are small, author-written sets, so they show gross failures rather than pr
 
 ## Architecture
 
+All stages run inside the Streamlit app (`app.py`), starting from a ledger CSV that is loaded and schema-checked with Decimal amounts.
+
 ```mermaid
-graph TD
-    A[Ledger CSV] --> B[Schema validation<br/>Decimal parsing]
-    B --> C{Tier 1: deterministic rules}
-    C -->|rule hit| F[Force review]
-    C -->|no hit| D[Tier 0: behavioural anomaly model]
-    D -->|anomalous| F
-    D -->|normal| E[Dropped, logged]
-    F --> G[Tier 2: RAG compliance assessment<br/>structured verdict]
-    G --> N[Investigative ledger<br/>every verdict recorded: SUSPICIOUS / CLEAR / ERROR]
-    N -->|analyst selects any row| H[Tier 3: LangGraph topology agent]
-    H --> I{Topology score >= 70?}
-    I -->|yes| J[Execution pauses for officer]
-    I -->|no| R[Forensic summary]
-    J -->|reject| L[Escalate, no filing]
-    J -->|approve| K[SAR drafting]
-    N -->|any SUSPICIOUS row| O[Officer review<br/>approve / reject / escalate]
-    O -->|approve| K
-    O -->|reject / escalate| L
-    K --> M[Durable audit trail]
-    L --> M
-    N --> M
+%%{init: {"flowchart": {"rankSpacing": 20, "nodeSpacing": 24, "wrappingWidth": 420}}}%%
+flowchart TB
+    RULES["Tier 1: rules and sanctions screening"] -->|"all rows, with rule flags"| ML["Tier 0: behaviour features and Isolation Forest"]
+    ML -->|"rule flag and anomaly flag"| MERGE{{"Merge of flags"}}
+    MERGE -->|"neither"| DROP["Not forwarded"]
+    MERGE -->|"rule hit or anomaly"| LLM["Tier 2: LLM review with Qdrant retrieval"]
+    LLM -->|"structured output"| VERD["Schema-validated verdict: SUSPICIOUS, CLEAR or ERROR"]
+    VERD -->|"SUSPICIOUS rows"| OFF["Officer review"]
+    VERD -->|"every verdict"| DB[("SQLite audit log")]
+    OFF -->|"named decision"| DB
+    DB -->|"latest decision is approve"| SAR["SAR draft"]
+    VERD -->|"row chosen by analyst"| CYC["Tier 3: graph cycle detection"]
+    CYC -->|"risk score"| GATE{{"LangGraph gate: score 70 or above?"}}
+    GATE -->|"no"| SUM["Forensic summary"]
+    GATE -->|"yes, paused"| HUM["Human approval"]
+    HUM -->|"approve"| SUM
+    HUM -->|"reject"| ESC["Escalated, no filing"]
 ```
 
+Sanctions hits, forwarded rows, verdicts, officer and approval decisions and SAR drafts are all written to the SQLite audit log. A SAR can be drafted only for a SUSPICIOUS row whose latest recorded human decision, from officer review or from the topology gate, is an approval.
+
 - **Tier 1, rules** (`utils/rules.py`): reporting threshold, the structuring band just below it, high-risk jurisdictions, fuzzy sanctions-name matching and unidentified counterparties. A rule hit always forces a review. Countries are resolved to ISO 3166-1 alpha-2 codes (`utils/jurisdictions.py`: codes, official names and common aliases such as DPRK or Burma) and compared exactly, so "Prussia" never matches "Russia". A country that can't be resolved is noted as an unresolved jurisdiction without forcing a review on its own.
-- **Tier 0, behaviour model** (`utils/funnel.py`, `utils/features.py`): sixteen account-behaviour features scored against the batch's own median, including four that follow money passed straight on to another account.
+- **Tier 0, behaviour model** (`utils/funnel.py`, `utils/features.py`): sixteen account-behaviour features scored against the batch's own median, including four that follow money passed straight on to another account. They are computed for every row except self-transfers, not only rows with a rule hit; a batch under 25 rows is not scored and every row is forwarded.
 - **Tier 2, AI review** (`utils/agents.py`): retrieval-grounded analysis with a structured verdict. Runs on Claude Haiku 4.5 (Amazon Bedrock) or Gemini 2.5 Flash (Google Vertex AI), switchable in config. Transient model errors such as throttling or timeouts are retried with exponential backoff, up to `LLM_MAX_RETRIES` times after the first attempt (default 3, so at most 4 calls); errors a retry can't fix, such as bad credentials or an unknown model, fail at once. SDK-level retries are switched off so this is the only retry layer: the Bedrock client uses botocore `retries={"max_attempts": 0}` (this setting counts retries after the first request; tested against a local HTTP 429 server, it sends exactly one request per call, where `1` sends two), and the Vertex clients use `max_retries=0`.
-- **Tier 3, network check** (`utils/graph_nodes.py`, `utils/graph_logic.py`): circular flows, account velocity and hidden beneficiaries, over the full ledger. A high score pauses for an officer.
+- **Tier 3, network check** (`utils/graph_nodes.py`, `utils/graph_logic.py`): circular flows, account velocity and hidden beneficiaries, using the full loaded ledger as history, including rows the funnel did not forward. A high score pauses for an officer.
 
 ## Design decisions
 
