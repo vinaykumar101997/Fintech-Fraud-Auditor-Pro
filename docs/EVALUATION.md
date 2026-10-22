@@ -599,6 +599,14 @@ In run 1 one review failed after four attempts because the model called a built-
 - Themes in the six clean cases still flagged: the reporting-threshold line read as a duty to escalate (4); missing wire-message or purpose data despite the new sentence (3); escalation on ambiguity (2 to 3); a solicitor's client account (1); an irrelevant citation (1).
 - Policy: changes are cumulative. Change 1 stays in the reviewer prompt, and each later change is tested on top of it, in the order listed above. The held-out set has not been run; it is run once, after a change passes the development rule.
 
+**Change 2 result (development set).**
+
+- Change 2 removed the sentence about weighing the cost of a missed filing against an unnecessary one and preferring escalation when the evidence is ambiguous; change 1 stays in. Result against the rule: clean cases cleared 11/13 (needed 8; run 2 3/13; change 1 7/13), PASS. No SUSPICIOUS case that was correct in run 2 changed to CLEAR (15/15 outside pass_through), PASS. Errored reviews 0, PASS.
+- Figures (run 2 / change 1 / change 2): accuracy 20/31, 23/31, 27/31; SUSPICIOUS recall 17/18, 16/18, 16/18 (15/15 without pass_through); SUSPICIOUS precision 17/27, 16/22, 16/18; false positives 10, 6, 2; model calls 63, 65, 62; output tokens 29,037, 154,602, 29,228; cost about $0.09, $0.41, $0.09. A review took 26.6 seconds on average; PI-04 took 217 seconds with 585 output tokens.
+- Still flagged: OC-07, which reads the row as a wire message and claims the counterparty jurisdiction is missing although the record gives one, and OT-03, a payment to a solicitor's client account that the author judged ambiguous.
+- Limits: this is one run, so the improvement from 7 to 11 is larger than the documented noise but not replicated. PT-01, a pass-through case flagged correctly in run 2 without the review being able to see its signal, is CLEAR again. Every SUSPICIOUS case in both case sets has a rule reason, so neither set measures what removing the escalate-on-ambiguity sentence costs on suspicious cases without a rule hit; a third case set for that is needed before this prompt is treated as the default.
+- Next: the held-out set is run once with this prompt, under the acceptance rule above, and the result is reported whatever it is.
+
 **Limits.**
 
 - The expected verdicts were written by the project author and have not been independently annotated.
