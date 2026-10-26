@@ -2,6 +2,10 @@
 
 A tool that screens bank transactions for money laundering using rules, statistics, network analysis and an AI model, with a compliance officer making the final call.
 
+![Demo: a circular flow is flagged, the topology audit pauses at the human gate, and an officer approves](docs/img/auditor-demo.gif)
+
+*Demo on the bundled synthetic sample ledger: the AI review flags a circular flow, the topology score reaches the 70/100 review threshold, execution pauses for a named officer, and the decision is recorded in the audit log.*
+
 ## What it is
 
 The tool reads a ledger of bank transactions and works out which ones look like money laundering. Quick rules and statistics pick out the suspicious transactions, an AI model reviews those against anti-money-laundering guidance, and a compliance officer must approve before a Suspicious Activity Report (SAR) is drafted. Every decision is recorded in an audit log.
