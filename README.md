@@ -52,7 +52,7 @@ These are small, author-written sets, so they show gross failures rather than pr
 
 ## Architecture
 
-All stages run inside the Streamlit app (`app.py`), starting from a ledger CSV that is loaded and schema-checked with Decimal amounts.
+All steps run inside the Streamlit app (`app.py`), starting from a ledger CSV that is loaded and schema-checked with Decimal amounts.
 
 ```mermaid
 %%{init: {"flowchart": {"rankSpacing": 14, "nodeSpacing": 24, "wrappingWidth": 420}}}%%
@@ -89,7 +89,7 @@ Sanctions hits, forwarded rows, verdicts, officer and approval decisions and SAR
 
 - **Tier 1, rules** (`utils/rules.py`): reporting threshold, the structuring band just below it, high-risk jurisdictions, fuzzy sanctions-name matching and unidentified counterparties. A rule hit always forces a review. Countries are resolved to ISO 3166-1 alpha-2 codes (`utils/jurisdictions.py`: codes, official names and common aliases such as DPRK or Burma) and compared exactly, so "Prussia" never matches "Russia". A country that can't be resolved is noted as an unresolved jurisdiction without forcing a review on its own.
 - **Tier 0, behaviour model** (`utils/funnel.py`, `utils/features.py`): sixteen account-behaviour features scored against the batch's own median, including four that follow money passed straight on to another account. They are computed for every row except self-transfers, not only rows with a rule hit; a batch under 25 rows is not scored and every row is forwarded.
-- **Tier 2, AI review** (`utils/agents.py`): retrieval-grounded analysis with a structured verdict. Runs on Claude Haiku 4.5 (Amazon Bedrock) or Gemini 2.5 Flash (Google Vertex AI), switchable in config. Transient model errors such as throttling or timeouts are retried with exponential backoff, up to `LLM_MAX_RETRIES` times after the first attempt (default 3, so at most 4 calls); errors a retry can't fix, such as bad credentials or an unknown model, fail at once. SDK-level retries are switched off so this is the only retry layer: the Bedrock client uses botocore `retries={"max_attempts": 0}` (this setting counts retries after the first request; tested against a local HTTP 429 server, it sends exactly one request per call, where `1` sends two), and the Vertex clients use `max_retries=0`.
+- **Tier 2, AI review** (`utils/agents.py`): retrieval-grounded analysis with a structured verdict. Runs on Claude Haiku 4.5 (Amazon Bedrock) or Gemini 2.5 Flash (Google Vertex AI), switchable in config. Verified live on Gemini 2.5 Flash (Vertex AI); the Bedrock path is implemented and tested against a local server but has not been run live. Transient errors are retried with exponential backoff up to LLM_MAX_RETRIES times (default 3); SDK-level retries are switched off so this is the only retry layer.
 - **Tier 3, network check** (`utils/graph_nodes.py`, `utils/graph_logic.py`): circular flows, account velocity and hidden beneficiaries, using the full loaded ledger as history, including rows the funnel did not forward. A high score pauses for an officer.
 
 ## Design decisions
@@ -126,7 +126,7 @@ Sanctions hits, forwarded rows, verdicts, officer and approval decisions and SAR
 
 ## Quick start
 
-Tested on Python 3.12 (CI) and 3.14 (local, Windows 11). On 3.14 the first install is slower because SQLAlchemy builds from source.
+Tested on Python 3.12.
 
 ```bash
 git clone https://github.com/vinaykumar101997/Fintech-Fraud-Auditor-Pro.git
@@ -151,7 +151,7 @@ python scripts/ingest_pdf.py --file path/to/aml_guidelines.pdf
 `requirements-dev.txt` is enough for the tests and the evaluation; it includes `langchain-core` and `pydantic` for the prompt-injection tests but skips the model providers and the UI libraries.
 
 ```bash
-pytest tests/ -v                          # 454 offline tests (3 skipped); the full install runs 465
+pytest tests/ -v   # the 3 tests that need the full install skip under requirements-dev.txt
 python scripts/generate_sample_ledger.py  # fixed seed, so the numbers above reproduce exactly
 python scripts/evaluate.py                # recall and precision by laundering type
 python scripts/eval_llm_tier.py           # AI review tier vs labelled cases, fake model by default; see docs/EVALUATION.md
@@ -176,14 +176,16 @@ python scripts/eval_external.py --path data/external/HI-Small_Trans.csv --max-ro
 - **Paused cases are lost on restart.** LangGraph's `MemorySaver` is in-memory; a Postgres checkpointer would make pauses durable.
 - **The sanctions list is a demo file.** Replace `data/sanctions_list.csv` with an OFAC export, and confirm matches against date of birth and nationality.
 - **SQLite is single-node, and Streamlit is synchronous.** Fine for a few thousand rows; larger batches need Postgres and a job queue.
+- **Parallel reviews can exceed Vertex's embedding rate limit.** With the default LLM_MAX_WORKERS=4, some reviews can fail with a 429 on the embedding model and come back as ERROR (never cleared). Setting LLM_MAX_WORKERS=2 avoided it in testing.
 
 ## Roadmap
 
 - Validate the cycle thresholds and recall on the IBM AML dataset
-- Evaluate the AI tier: verdict accuracy, faithfulness of SAR drafts, cost and latency
+- Evaluate SAR-draft faithfulness and review latency (verdict accuracy and cost are in docs/EVALUATION.md)
 - FastAPI backend with a job queue
 - Postgres checkpointer and audit log
 - Analyst feedback loop to tune thresholds against confirmed outcomes
+- Retry with backoff on embedding calls
 
 ## License
 

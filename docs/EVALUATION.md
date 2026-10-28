@@ -543,6 +543,8 @@ Each case reaches the engine with the same arguments the app passes: the transac
 
 **Metrics.** Verdict accuracy, SUSPICIOUS precision and recall with Wilson 95% intervals, a confusion matrix with an ERROR column, accuracy per category, and the share of reviews that errored. An ERROR is never a correct answer, so it counts against accuracy and recall, and the harness exits with code 1 if any errored review were counted as CLEAR.
 
+**Retries.** The engine is the only retry layer. The Bedrock client uses botocore `retries={"max_attempts": 0}`: this setting counts retries after the first request, so `0` sends one request per call and `1` sends two (tested against a local HTTP 429 server). The Vertex clients use `max_retries=0`.
+
 **Running it.**
 
 ```bash
