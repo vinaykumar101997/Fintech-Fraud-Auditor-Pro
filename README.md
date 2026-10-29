@@ -89,7 +89,7 @@ Sanctions hits, forwarded rows, verdicts, officer and approval decisions and SAR
 
 - **Tier 1, rules** (`utils/rules.py`): reporting threshold, the structuring band just below it, high-risk jurisdictions, fuzzy sanctions-name matching and unidentified counterparties. A rule hit always forces a review. Countries are resolved to ISO 3166-1 alpha-2 codes (`utils/jurisdictions.py`: codes, official names and common aliases such as DPRK or Burma) and compared exactly, so "Prussia" never matches "Russia". A country that can't be resolved is noted as an unresolved jurisdiction without forcing a review on its own.
 - **Tier 0, behaviour model** (`utils/funnel.py`, `utils/features.py`): sixteen account-behaviour features scored against the batch's own median, including four that follow money passed straight on to another account. They are computed for every row except self-transfers, not only rows with a rule hit; a batch under 25 rows is not scored and every row is forwarded.
-- **Tier 2, AI review** (`utils/agents.py`): retrieval-grounded analysis with a structured verdict. Runs on Claude Haiku 4.5 (Amazon Bedrock) or Gemini 2.5 Flash (Google Vertex AI), switchable in config. Verified live on Gemini 2.5 Flash (Vertex AI); the Bedrock path is implemented and tested against a local server but has not been run live. Transient errors are retried with exponential backoff up to LLM_MAX_RETRIES times (default 3); SDK-level retries are switched off so this is the only retry layer.
+- **Tier 2, AI review** (`utils/agents.py`): retrieval-grounded analysis with a structured verdict. Runs on Claude Haiku 4.5 (Amazon Bedrock) or Gemini 2.5 Flash (Google Vertex AI), switchable in config. Verified live on Gemini 2.5 Flash (Vertex AI); the Bedrock path is implemented and tested against a local server but has not been run live. Transient errors are retried with exponential backoff up to LLM_MAX_RETRIES times (default 3); SDK-level retries are switched off so this is the only retry layer. Rate-limit errors (HTTP 429, RESOURCE_EXHAUSTED, throttling) back off from a longer LLM_RATE_LIMIT_BASE_DELAY (default 5 s), and LLM_RETRY_MAX_WAIT (default 60 s) caps the total wait per call. The question's embedding runs inside the retried retrieval call, and PDF indexing retries each embedding batch the same way.
 - **Tier 3, network check** (`utils/graph_nodes.py`, `utils/graph_logic.py`): circular flows, account velocity and hidden beneficiaries, using the full loaded ledger as history, including rows the funnel did not forward. A high score pauses for an officer.
 
 ## Design decisions
@@ -176,7 +176,7 @@ python scripts/eval_external.py --path data/external/HI-Small_Trans.csv --max-ro
 - **Paused cases are lost on restart.** LangGraph's `MemorySaver` is in-memory; a Postgres checkpointer would make pauses durable.
 - **The sanctions list is a demo file.** Replace `data/sanctions_list.csv` with an OFAC export, and confirm matches against date of birth and nationality.
 - **SQLite is single-node, and Streamlit is synchronous.** Fine for a few thousand rows; larger batches need Postgres and a job queue.
-- **Parallel reviews can exceed Vertex's embedding rate limit.** With the default LLM_MAX_WORKERS=4, some reviews can fail with a 429 on the embedding model and come back as ERROR (never cleared). Setting LLM_MAX_WORKERS=2 avoided it in testing.
+- **Parallel reviews can exceed Vertex's embedding rate limit.** Rate-limit errors (429) are retried with a longer backoff, but a very low limit can still slow a large run or make some reviews fail and come back as ERROR (never cleared). Setting LLM_MAX_WORKERS=2 instead of the default 4 helps.
 
 ## Roadmap
 
@@ -185,7 +185,7 @@ python scripts/eval_external.py --path data/external/HI-Small_Trans.csv --max-ro
 - FastAPI backend with a job queue
 - Postgres checkpointer and audit log
 - Analyst feedback loop to tune thresholds against confirmed outcomes
-- Retry with backoff on embedding calls
+- Move off the legacy textembedding-gecko model (requires re-indexing Qdrant)
 
 ## License
 
