@@ -201,5 +201,9 @@ LLM_MAX_WORKERS = int(os.getenv("LLM_MAX_WORKERS", "4"))
 # errors (bad credentials, unknown model) are never retried.
 LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "3"))
 LLM_RETRY_BASE_DELAY = float(os.getenv("LLM_RETRY_BASE_DELAY", "1.5"))
+# Rate-limit errors (429, RESOURCE_EXHAUSTED, throttling) back off from this
+# longer base delay instead. LLM_RETRY_MAX_WAIT caps the total sleep per call.
+LLM_RATE_LIMIT_BASE_DELAY = float(os.getenv("LLM_RATE_LIMIT_BASE_DELAY", "5"))
+LLM_RETRY_MAX_WAIT = float(os.getenv("LLM_RETRY_MAX_WAIT", "60"))
 MAX_LEDGER_ROWS = int(os.getenv("MAX_LEDGER_ROWS", "50000"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")

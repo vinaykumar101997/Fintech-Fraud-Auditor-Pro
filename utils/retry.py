@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import random
+import re
 import time
 from typing import Callable, Optional, TypeVar
 
@@ -41,10 +42,24 @@ TERMINAL_ERROR_MARKERS = (
 )
 
 
+# Rate-limit failures: HTTP 429, google-api-core's ResourceExhausted (gRPC
+# RESOURCE_EXHAUSTED) and Bedrock's ThrottlingException. A per-minute limit
+# needs longer to reset than a dropped connection, so these wait on their own,
+# longer base delay. They are still transient, never terminal.
+_RATE_LIMIT_PATTERN = re.compile(
+    r"429|RESOURCE_EXHAUSTED|ResourceExhausted|Throttling|TooManyRequests"
+)
+
+
 def is_terminal(exc: Exception) -> bool:
     """True for failures a retry cannot fix, so the caller can fail fast."""
     text = f"{type(exc).__name__}: {exc}"
     return any(marker in text for marker in TERMINAL_ERROR_MARKERS)
+
+
+def is_rate_limited(exc: Exception) -> bool:
+    """True for throttling and quota-style 429 failures."""
+    return bool(_RATE_LIMIT_PATTERN.search(f"{type(exc).__name__}: {exc}"))
 
 
 def call_with_retry(
@@ -53,6 +68,8 @@ def call_with_retry(
     *,
     max_retries: int,
     base_delay: float,
+    rate_limit_base_delay: Optional[float] = None,
+    max_wait: Optional[float] = None,
     sleep: Callable[[float], None] = time.sleep,
 ) -> T:
     """Exponential backoff with jitter, but only for transient failures.
@@ -65,9 +82,16 @@ def call_with_retry(
     attempt, so fn() is called at most 1 + max_retries times: 0 makes exactly
     one attempt, 3 makes up to four. Negative values are treated as 0. When
     every attempt fails, the last error is raised.
+
+    A rate-limit failure (429, RESOURCE_EXHAUSTED, throttling) backs off from
+    `rate_limit_base_delay` instead of `base_delay`; None uses `base_delay`.
+    `max_wait` caps the total sleep for the call: when the next delay would
+    take the total past it, no further attempt is made and the last error is
+    raised. None means no cap.
     """
     last: Optional[Exception] = None
     attempts = 1 + max(max_retries, 0)
+    waited = 0.0
     for attempt in range(attempts):
         try:
             return fn()
@@ -79,7 +103,18 @@ def call_with_retry(
                 raise
             if attempt == attempts - 1:
                 break
-            delay = base_delay * (2**attempt) + random.uniform(0, 0.4)
+            base = base_delay
+            if rate_limit_base_delay is not None and is_rate_limited(exc):
+                base = rate_limit_base_delay
+            delay = base * (2**attempt) + random.uniform(0, 0.4)
+            if max_wait is not None and waited + delay > max_wait:
+                logger.error(
+                    "%s failed (attempt %d/%d): %s. Next delay of %.1fs would exceed "
+                    "the %.0fs retry limit. Giving up.",
+                    description, attempt + 1, attempts, exc, delay, max_wait,
+                )
+                break
+            waited += delay
             logger.warning(
                 "%s failed (attempt %d/%d): %s. Retrying in %.1fs.",
                 description, attempt + 1, attempts, exc, delay,

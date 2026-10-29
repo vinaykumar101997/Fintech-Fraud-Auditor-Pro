@@ -71,6 +71,8 @@ class ComplianceAuditEngine:
             description,
             max_retries=config.LLM_MAX_RETRIES,
             base_delay=config.LLM_RETRY_BASE_DELAY,
+            rate_limit_base_delay=config.LLM_RATE_LIMIT_BASE_DELAY,
+            max_wait=config.LLM_RETRY_MAX_WAIT,
         )
 
     # --- public API --------------------------------------------------------

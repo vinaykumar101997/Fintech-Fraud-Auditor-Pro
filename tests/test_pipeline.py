@@ -575,6 +575,132 @@ def test_exhausted_retries_raise_after_one_plus_max_retries_attempts():
     assert len(sleeps) == 3
 
 
+class ResourceExhausted(Exception):
+    """Same class name google-api-core uses for HTTP 429 / RESOURCE_EXHAUSTED."""
+
+
+class PermissionDenied(Exception):
+    """Same class name google-api-core uses for a credentials failure."""
+
+
+@pytest.fixture
+def no_jitter(monkeypatch):
+    monkeypatch.setattr("utils.retry.random.uniform", lambda a, b: 0.0)
+
+
+def _limited_retry(fn, max_retries, sleeps, max_wait=60.0):
+    return call_with_retry(fn, "test call", max_retries=max_retries, base_delay=1.5,
+                           rate_limit_base_delay=5.0, max_wait=max_wait,
+                           sleep=sleeps.append)
+
+
+@pytest.mark.parametrize("error", [
+    ResourceExhausted("429 Resource exhausted"),
+    RuntimeError("An error occurred (ThrottlingException) when calling the "
+                 "InvokeModel operation: Too many requests"),
+], ids=["vertex-429", "bedrock-throttling"])
+def test_rate_limit_errors_back_off_from_the_longer_delay(error, no_jitter):
+    fn, sleeps = _Flaky(failures=3, error=error), []
+    assert _limited_retry(fn, max_retries=3, sleeps=sleeps) == "ok"
+    assert fn.calls == 4
+    assert sleeps == [5.0, 10.0, 20.0]
+
+
+def test_other_transient_errors_keep_the_normal_delay(no_jitter):
+    fn, sleeps = _Flaky(failures=2), []
+    assert _limited_retry(fn, max_retries=3, sleeps=sleeps) == "ok"
+    assert sleeps == [1.5, 3.0]
+
+
+def test_rate_limit_error_surfaces_after_max_retries(no_jitter):
+    fn, sleeps = _Flaky(failures=10, error=ResourceExhausted("429 Resource exhausted")), []
+    with pytest.raises(ResourceExhausted):
+        _limited_retry(fn, max_retries=3, sleeps=sleeps)
+    assert fn.calls == 4
+    assert len(sleeps) == 3
+
+
+def test_auth_error_is_not_retried_even_with_a_rate_limit_delay():
+    fn, sleeps = _Flaky(failures=5, error=PermissionDenied("403 Permission denied")), []
+    with pytest.raises(PermissionDenied):
+        _limited_retry(fn, max_retries=3, sleeps=sleeps)
+    assert fn.calls == 1
+    assert sleeps == []
+
+
+def test_total_sleep_never_exceeds_the_max_wait(no_jitter):
+    """5 s, then 10 s would bring the total to 15 s, past a 12 s cap: stop there."""
+    fn, sleeps = _Flaky(failures=10, error=ResourceExhausted("429 Resource exhausted")), []
+    with pytest.raises(ResourceExhausted):
+        _limited_retry(fn, max_retries=5, sleeps=sleeps, max_wait=12.0)
+    assert sleeps == [5.0]
+    assert fn.calls == 2
+
+
+@pytest.mark.parametrize("failures, verdict, embed_calls", [
+    (2, "CLEAR", 3),   # recovers within LLM_MAX_RETRIES
+    (4, "ERROR", 4),   # gives up after 1 + LLM_MAX_RETRIES attempts
+], ids=["recovers", "gives-up"])
+def test_query_embedding_429_is_retried_by_the_review(monkeypatch, no_jitter,
+                                                      failures, verdict, embed_calls):
+    """The question is embedded inside the retrieval call, which the engine's
+    single retry layer wraps; a 429 there backs off from the rate-limit delay."""
+    from functools import partial
+
+    from langchain_core.embeddings import Embeddings
+    from langchain_core.runnables import RunnableLambda
+    from langchain_core.vectorstores import InMemoryVectorStore
+
+    import utils.agents as agents
+    from utils.schemas import TransactionAssessment
+
+    class FlakyEmbedder(Embeddings):
+        def __init__(self):
+            self.failures, self.calls = failures, 0
+
+        def embed_documents(self, texts):
+            return [[1.0, 0.0] for _ in texts]
+
+        def embed_query(self, text):
+            self.calls += 1
+            if self.calls <= self.failures:
+                raise ResourceExhausted("429 Resource exhausted")
+            return [1.0, 0.0]
+
+    class Retrieval:
+        def __init__(self, retriever):
+            self.retriever = retriever
+
+        def invoke(self, payload):
+            docs = self.retriever.invoke(payload["query"])
+            return {"result": " ".join(d.page_content for d in docs)}
+
+    class Reviewer:
+        def with_structured_output(self, _schema):
+            return RunnableLambda(lambda _: TransactionAssessment(
+                verdict="CLEAR", rationale="Ordinary supplier payment.", confidence=0.9,
+                primary_typology="none", injection_attempt_observed=False))
+
+    embedder = FlakyEmbedder()
+    store = InMemoryVectorStore(embedder)
+    store.add_texts(["Guidance on supplier payments."])
+    embedder.calls = 0
+    sleeps = []
+    monkeypatch.setattr(config, "LLM_MAX_RETRIES", 3)
+    monkeypatch.setattr(config, "LLM_RETRY_BASE_DELAY", 1.5)
+    monkeypatch.setattr(config, "LLM_RATE_LIMIT_BASE_DELAY", 5.0)
+    monkeypatch.setattr(config, "LLM_RETRY_MAX_WAIT", 60.0)
+    monkeypatch.setattr(agents, "call_with_retry", partial(call_with_retry, sleep=sleeps.append))
+
+    outcome = agents.ComplianceAuditEngine(llm=Reviewer()).assess_transaction(
+        transaction_id="T-1", amount=Decimal("1200.00"), country="United Kingdom",
+        rag_engine=Retrieval(store.as_retriever(search_kwargs={"k": 1})))
+
+    assert outcome.verdict.value == verdict
+    assert embedder.calls == embed_calls
+    assert sleeps == [5.0, 10.0, 20.0][:embed_calls - 1]
+
+
 # --- topology scoring ------------------------------------------------------
 def _history(rows, partners):
     out = [{"sender": "A", "receiver": f"P{i % partners}"} for i in range(rows)]

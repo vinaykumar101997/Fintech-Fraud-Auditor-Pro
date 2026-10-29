@@ -26,6 +26,7 @@ from qdrant_client.models import Distance, PointStruct, VectorParams  # noqa: E4
 
 import config  # noqa: E402
 from utils.llm_provider import get_embeddings  # noqa: E402
+from utils.retry import call_with_retry  # noqa: E402
 
 logging.basicConfig(level=config.LOG_LEVEL)
 logger = logging.getLogger(__name__)
@@ -57,7 +58,14 @@ class DocumentIngestionEngine:
         vectors: List[List[float]] = []
         for start in range(0, len(texts), EMBED_BATCH_SIZE):
             batch = texts[start : start + EMBED_BATCH_SIZE]
-            vectors.extend(self.embeddings.embed_documents(batch))
+            vectors.extend(call_with_retry(
+                lambda: self.embeddings.embed_documents(batch),
+                f"Embedding fragments {start + 1}-{start + len(batch)}",
+                max_retries=config.LLM_MAX_RETRIES,
+                base_delay=config.LLM_RETRY_BASE_DELAY,
+                rate_limit_base_delay=config.LLM_RATE_LIMIT_BASE_DELAY,
+                max_wait=config.LLM_RETRY_MAX_WAIT,
+            ))
             logger.info("Embedded %d/%d fragments", len(vectors), len(texts))
         return vectors
 
