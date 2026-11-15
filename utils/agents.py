@@ -23,6 +23,7 @@ from langchain_core.prompts import ChatPromptTemplate
 
 import config
 from utils.llm_provider import get_chat_model
+from utils.retrieval_query import build_retrieval_query
 from utils.retry import call_with_retry
 from utils.sanitize import build_evidence_block, scrub
 from utils.schemas import TransactionAssessment
@@ -30,15 +31,6 @@ from utils.verdicts import AuditOutcome, Verdict
 
 logger = logging.getLogger(__name__)
 
-
-_ANALYST_SYSTEM = (
-    "You are a senior forensic auditor specialising in AML/CTF. Assess the "
-    "transaction record for structuring, layering, and jurisdictional risk "
-    "against FATF standards and the retrieved regulatory context. Base your "
-    "assessment only on the evidence provided and the retrieved context. If the "
-    "evidence is insufficient for a confident judgement, say so in the rationale "
-    "and lower your confidence rather than speculating."
-)
 
 _REVIEWER_SYSTEM = (
     "You are a compliance review officer. You are given a transaction record and "
@@ -48,6 +40,21 @@ _REVIEWER_SYSTEM = (
     "to reach an independent verdict: confirm the finding, or identify it as a false "
     "positive. Return only the structured assessment."
 )
+
+
+def evidence_block(*, transaction_id, amount, country, sender="", receiver="",
+                   rule_reasons: Optional[list] = None) -> str:
+    """The fenced transaction record both steps of the review are given."""
+    return build_evidence_block(
+        {
+            "transaction_id": transaction_id,
+            "amount": f"{amount:,.2f}",
+            "counterparty_jurisdiction": country,
+            "originator": sender,
+            "beneficiary": receiver,
+            "deterministic_rule_hits": "; ".join(rule_reasons or []) or "none",
+        }
+    )
 
 
 class ComplianceAuditEngine:
@@ -88,23 +95,23 @@ class ComplianceAuditEngine:
         rag_engine: Any = None,
     ) -> AuditOutcome:
         """Assess one transaction. Always returns an AuditOutcome, never raises."""
-        evidence = build_evidence_block(
-            {
-                "transaction_id": transaction_id,
-                "amount": f"{amount:,.2f}",
-                "counterparty_jurisdiction": country,
-                "originator": sender,
-                "beneficiary": receiver,
-                "deterministic_rule_hits": "; ".join(rule_reasons or []) or "none",
-            }
+        evidence = evidence_block(
+            transaction_id=transaction_id, amount=amount, country=country,
+            sender=sender, receiver=receiver, rule_reasons=rule_reasons,
         )
 
         try:
-            # Stage 1: retrieval-grounded analysis.
+            # Stage 1: retrieval-grounded analysis. The corpus is searched with
+            # a query built from the rule hits and key facts; the model then
+            # assesses the fenced record against what came back.
             if rag_engine is not None:
-                query = f"{_ANALYST_SYSTEM}\n\n{evidence}"
+                query = build_retrieval_query(
+                    amount=amount, country=country, sender=sender, receiver=receiver,
+                    rule_reasons=rule_reasons,
+                ).text
                 raw = self._with_retry(
-                    lambda: rag_engine.invoke({"query": query}), "RAG analysis"
+                    lambda: rag_engine.invoke({"query": query, "evidence": evidence}),
+                    "RAG analysis",
                 )
                 finding = (raw or {}).get("result", "").strip()
             else:

@@ -651,3 +651,113 @@ In run 1 one review failed after four attempts because the model called a built-
 - The review does not receive the behaviour-model flags, so the three pass-through cases, which have no rule hit, are expected misses.
 - The prompt-injection cases are scored against the engine's policy of escalating any reported injection to SUSPICIOUS.
 - A full live run makes two model calls per case, so it needs `--max-calls 62` or more.
+
+## Retrieval evaluation
+
+The verdict evaluation above scores the review's answer. It does not say whether the passages retrieved for a case were the right ones. `scripts/eval_retrieval.py` measures that directly: for each labelled case it embeds a query, takes the nearest fragments from the index and compares them with the fragments labelled relevant for the case. No chat model is called.
+
+**Why.** The query sent to the index was the review's whole instruction text followed by the fenced transaction record, so most of the embedded text was the same for every case. The per-case records showed the consequence: the wire-transfer pages came back for all 31 development cases.
+
+**Pre-registered plan** (written before any retrieval was run for this evaluation, and before the new query code existed).
+
+- Labels: `tests/fixtures/retrieval_cases.json`, SHA-256 `bd6517950ba0d98bce3943066df35d70ba78816970cfb36efcce4cb2f6db09ef` (file with LF line endings). The file holds fragment ids and page indexes only, no guidance text.
+- How the labels were made: the guidance PDF was split locally with the ingestion settings (1,200 characters, 150 overlap), which reproduces the 410 fragment ids in the index without calling the embedding model or the vector store. Fifteen topics were defined from the signals in the case files (reporting threshold, structuring, higher-risk country, ownership opacity, sanctions, missing party information, politically exposed persons, virtual assets, money transfer and currency exchange, precious-metals dealers, customer-profile consistency, product and channel risk, non-profit organisations, legal professionals and real estate, trusts). For each topic, candidate fragments were found by keyword search over the local split and then read; a fragment is relevant if it states a requirement, definition, threshold or risk factor a reviewer would apply to a payment showing that signal. Contents pages, revision tables, abbreviation lists and passages that only describe procedures between countries are not relevant. The 15 topics cover 86 distinct fragments.
+- Cases: 47 cases taken by id from the three verdict case files: every case with a rule reason except the prompt-injection cases (35, stratum `rule_hit`) and the 12 SUSPICIOUS cases of the no-rule set (stratum `no_rule`). Each case lists the topics a reviewer of that case would need, chosen from the case's fields and its note; its relevant set is the union of its topics. Clean cases without a rule reason have no fragment a reviewer would need, so recall is undefined for them and they are left out; the pass-through cases are left out because their signal is not in the record.
+- Arms: (1) `old`, the query as sent before the change, the instruction text plus the fenced record; (2) `new`, the query built from rule hits and key facts (`utils/retrieval_query.py`); (3) `evidence`, the fenced record alone, the change listed in the plan above as "build the retrieval query from the evidence only".
+- Metrics, per case and averaged: recall@5 (relevant fragments in the top 5, divided by all relevant fragments), precision@5 (relevant fragments in the top 5, divided by 5) and MRR (1 / rank of the first relevant fragment within the top 10, 0 if none). Means are reported overall, per stratum and per topic, with a 95% percentile bootstrap interval over cases (10,000 resamples), and the paired difference of each other arm against `old` with the same interval.
+- Recall@5 ceiling: a case with more than five relevant fragments cannot reach a recall@5 of 1. The report prints the mean of the best recall@5 that the labels allow, so the figures can be read against it.
+- Mechanics: one query embedding per distinct query text, requested one at a time through the shared retry wrapper and cached on disk, so a rerun makes no embedding calls. Before scoring, the script checks that the index holds exactly the fragment ids of the local split and that every labelled id is among them, and stops otherwise.
+- Disclosure: the labels, the topics and the query builder have the same author. The labels were frozen by the SHA-256 hash above before the new query code was run, but the author had read the relevant fragments before writing the phrases the new query uses, so the gain measured for `new` is an upper estimate of what an independent set of labels would show. Page-level results of the old query on the development cases were already known from the per-case records above (the wire-transfer pages for every case); no fragment-level results of any arm were looked at while labelling.
+
+**Result (single run, three arms).** Vertex `text-embedding-004`, 410 fragments in a local Qdrant, the fragment ids in the index equal to the local split. Figures are means over cases with the 95% bootstrap interval in brackets. The best mean recall@5 the labels allow is 0.584, because 36 of the 47 cases have more than five relevant fragments; read recall against that, not against 1.
+
+**Summary.** Over all 47 cases, recall@5 improved from 0.044 to 0.142 (best possible 0.584) and precision@5 improved from 0.123 to 0.260, so about one in four retrieved fragments is relevant. The gain is confined to the 35 cases with a rule hit. On the 12 cases without one, the new query against the old gives recall@5 +0.035 (-0.026 to +0.094) and precision@5 +0.050 (-0.083 to +0.167), both inconclusive, and MRR fell from 0.358 to 0.170, a difference of -0.188 (-0.396 to -0.007): for cases without a rule hit the first relevant fragment now ranks lower. The evidence-only arm scored below the old query on precision@5 (-0.089, interval -0.136 to -0.047, which excludes zero), so the gain comes from the typology and topic terms in the new query, not from adding the facts alone.
+
+All 47 cases:
+
+| Arm | Recall@5 | Precision@5 | MRR |
+|---|---|---|---|
+| old | 0.044 (0.029 to 0.059) | 0.123 (0.081 to 0.170) | 0.217 (0.141 to 0.302) |
+| new | 0.142 (0.108 to 0.177) | 0.260 (0.196 to 0.328) | 0.476 (0.362 to 0.590) |
+| evidence | 0.023 (0.007 to 0.042) | 0.034 (0.013 to 0.060) | 0.134 (0.083 to 0.198) |
+| new minus old | +0.099 (+0.064 to +0.134) | +0.136 (+0.081 to +0.187) | +0.259 (+0.125 to +0.388) |
+| evidence minus old | -0.021 (-0.043 to +0.003) | -0.089 (-0.136 to -0.047) | -0.083 (-0.175 to +0.009) |
+
+Cases with a rule reason (35; best mean recall@5 0.590):
+
+| Arm | Recall@5 | Precision@5 | MRR |
+|---|---|---|---|
+| old | 0.034 (0.019 to 0.051) | 0.114 (0.063 to 0.171) | 0.169 (0.091 to 0.262) |
+| new | 0.154 (0.114 to 0.196) | 0.280 (0.200 to 0.366) | 0.581 (0.444 to 0.714) |
+| evidence | 0.027 (0.008 to 0.051) | 0.040 (0.011 to 0.074) | 0.155 (0.089 to 0.236) |
+| new minus old | +0.120 (+0.081 to +0.162) | +0.166 (+0.114 to +0.217) | +0.412 (+0.286 to +0.535) |
+| evidence minus old | -0.007 (-0.034 to +0.023) | -0.074 (-0.131 to -0.017) | -0.014 (-0.113 to +0.085) |
+
+Cases without a rule reason (12; best mean recall@5 0.566):
+
+| Arm | Recall@5 | Precision@5 | MRR |
+|---|---|---|---|
+| old | 0.072 (0.039 to 0.104) | 0.150 (0.083 to 0.217) | 0.358 (0.191 to 0.549) |
+| new | 0.108 (0.050 to 0.167) | 0.200 (0.100 to 0.300) | 0.170 (0.094 to 0.243) |
+| evidence | 0.010 (0.000 to 0.031) | 0.017 (0.000 to 0.050) | 0.073 (0.031 to 0.117) |
+| new minus old | +0.035 (-0.026 to +0.094) | +0.050 (-0.083 to +0.167) | -0.188 (-0.396 to -0.007) |
+| evidence minus old | -0.062 (-0.094 to -0.030) | -0.133 (-0.200 to -0.067) | -0.285 (-0.477 to -0.112) |
+
+Mean recall@5 by topic (a case with several topics counts under each):
+
+| Topic | Cases | old | new | evidence |
+|---|---|---|---|---|
+| customer_profile_consistency | 5 | 0.055 | 0.158 | 0.025 |
+| higher_risk_country | 8 | 0.100 | 0.205 | 0.010 |
+| legal_professionals_real_estate | 2 | 0.000 | 0.111 | 0.000 |
+| missing_party_information | 2 | 0.130 | 0.183 | 0.048 |
+| mvts_currency_exchange | 3 | 0.000 | 0.000 | 0.000 |
+| npo | 1 | 0.000 | 0.100 | 0.100 |
+| ownership_opacity | 8 | 0.098 | 0.149 | 0.012 |
+| pep | 2 | 0.056 | 0.000 | 0.000 |
+| precious_metals_dealers | 3 | 0.056 | 0.083 | 0.000 |
+| product_channel_risk | 1 | 0.000 | 0.200 | 0.000 |
+| reporting_threshold | 15 | 0.010 | 0.228 | 0.046 |
+| sanctions | 6 | 0.043 | 0.041 | 0.000 |
+| structuring | 7 | 0.000 | 0.000 | 0.024 |
+| trusts | 1 | 0.111 | 0.000 | 0.000 |
+| virtual_assets | 4 | 0.033 | 0.053 | 0.000 |
+
+**How to read it.**
+
+- On cases with a rule reason the new query is better on all three metrics, and each interval of the difference excludes zero. It still finds about a quarter of what the labels allow (0.154 against a best of 0.590).
+- The gain is not spread evenly. Recall@5 is higher for 30 cases, unchanged for 12 and lower for 5, and the 21 cases with a reporting-threshold or higher-risk-country topic account for about 84% of the summed gain. Structuring cases score 0.000 with the new query, as they did with the old one: none of the seven has a labelled fragment in its top five. Sanctions cases are unchanged (0.041 against 0.043). Money-transfer and currency-exchange cases stay at 0.000 in every arm.
+- Cases without a rule reason (figures in the summary): with no rule hit the query can only name the general monitoring duties, which puts a relevant fragment first less often than the old text did. The two politically-exposed-person cases and the trust case lose the little they had (0.056 and 0.111 to 0.000). The new query does not help these cases and on rank it is a regression.
+- The record alone (`evidence`) is the worst arm on every metric. Dropping the instruction text without saying what the case is about does not help, so that change is not adopted.
+- Looked at after the run, with nothing changed in response: for the structuring cases the new query returns the wire-transfer passages about payments below the de minimis threshold, the general risk-factor lists and the fragment next to the labelled one on reporting suspicion. Its wording about amounts "below a threshold" matches the wire-transfer threshold text more closely than the passages on the due-diligence threshold and linked operations. The topic phrases have not been tuned against this result; doing so on these labels would need a fresh set of labels to measure.
+
+**Limits.**
+
+- One embedding model, one document, one run. Retrieval here is deterministic for a given query, so a rerun gives the same figures, but nothing says how they carry to another corpus or model.
+- Same-author labels, as disclosed above, and a query whose phrases were written after reading the relevant fragments. The comparison favours `new`.
+- The new arm has 37 distinct query texts for 47 cases (the old and evidence arms have 47): cases with the same rule hits, amount band and country share a query. The bootstrap treats cases as independent, so the intervals for `new` are somewhat too narrow.
+- Topic labels are broad (the sanctions topic has 19 relevant fragments), so precision@5 can rise without the best fragment being found, and recall@5 is capped as stated.
+- The check that the harness measures what the review retrieves: for the 17 development cases in the label set, the top five pages of the `old` arm are the same, in the same order, as the pages recorded in the per-case files of the earlier live verdict runs. The same holds for the `new` arm against the pages recorded in the verdict run reported below.
+- Run notes: the first attempt stopped on the embedding quota (HTTP 429) after about ten requests and scored nothing; a pause between requests (`--pause`) was added and the run resumed from the cached vectors. 131 distinct query texts were embedded.
+
+**Verdicts after the change (development set, single run).** The retrieval metrics say nothing about verdicts, so the 31 development cases were run once more through the review as it now stands: the new query, and the retrieval chain rebuilt on `langchain_core` in place of the deprecated `RetrievalQA` (`utils/rag_chain.py`). The held-out set was not run.
+
+| | Change 2 (published above) | After the retrieval change |
+|---|---|---|
+| Verdict accuracy | 27/31 | 27/31 (Wilson 95% CI 71% to 95%) |
+| SUSPICIOUS recall | 16/18 (15/15 without pass_through) | 15/18 (15/15 without pass_through) |
+| SUSPICIOUS precision | 16/18 | 15/16 |
+| Clean cases cleared | 11/13 | 12/13 |
+| Errored reviews | 0 | 0 |
+| Model calls | 62 | 64 (two calls retried after a 429) |
+| Output tokens | 29,228 | 22,115 |
+| Estimated cost | about $0.09 | $0.0745 |
+| Average time per case | 26.6 s | 15.5 s (longest 24.4 s) |
+
+- Two cases changed. OC-07, a salary payment flagged in the earlier run, is now CLEAR, which is correct. PT-02, a pass-through case, went from SUSPICIOUS to CLEAR; the review cannot see the signal of the pass-through cases, so its earlier flag was not based on evidence, but it counts as a lost detection in the table. OT-03, the payment to a solicitor's client account, is still flagged.
+- How to read it: no regression in verdicts and no gain beyond the documented run-to-run noise of one or two cases. One run on 31 cases cannot show more than that.
+- The comparison is not of the query alone. Rebuilding the chain also changed how the first step is asked: the instruction text is now a system message, the fragments are numbered with their page, and the model is told to refer to a fragment by number. Any difference in verdicts belongs to the two changes together.
+- Retrieved pages are still concentrated. Pages 81 or 82 now come back for 11 of the 31 cases instead of all of them, but pages 85, 71, 33 and 70 come back for 22, 20, 19 and 17 of the 31. The new query varies with the case less than the labels would want; this fits the recall figures above.
+- pass_through is unchanged as a limitation: the review does not receive the behaviour-model flags, so a retrieval change cannot reach those cases.
+
+**Next steps (not done).** The cases without a rule hit need retrieval that does not depend on rule hits, for example a generic fallback query for those rows or a reranker over a wider candidate set; neither has been built or measured. The structuring and sanctions topics are also still open, and any change to the topic phrases needs labels it was not written against.

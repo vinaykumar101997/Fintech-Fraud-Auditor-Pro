@@ -55,7 +55,7 @@ def check_packages() -> None:
         "langchain_google_vertexai": "langchain-google-vertexai",
         "langchain_qdrant": "langchain-qdrant",
         "langchain_text_splitters": "langchain-text-splitters",
-        "langchain_classic": "langchain-classic", "fitz": "PyMuPDF",
+        "fitz": "PyMuPDF",
     }
     missing = []
     for module, package in required.items():

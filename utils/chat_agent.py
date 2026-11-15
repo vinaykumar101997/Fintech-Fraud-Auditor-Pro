@@ -6,8 +6,9 @@ cached. The first caller saw the exception; every caller after that got a broken
 object with no `.engine` and no error. `_instance` is now only set once
 initialisation has fully succeeded.
 
-`query()` also passed a bare string to RetrievalQA where the chain expects
-{"query": ...}, which agents.py was already doing correctly.
+The retrieval chain is built in utils/rag_chain.py: it searches with the
+`query` it is given and has the model assess the `evidence`, and it returns
+the ids and pages of the fragments it used.
 """
 
 from __future__ import annotations
@@ -15,12 +16,12 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from langchain_classic.chains import RetrievalQA
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 
 import config
 from utils.llm_provider import ProviderConfigError, get_models
+from utils.rag_chain import build_analysis_chain
 
 logger = logging.getLogger(__name__)
 
@@ -59,12 +60,9 @@ class ComplianceIntelligenceProvider:
                 embedding=self.embeddings,
                 vector_name="text-dense",
             )
-            self.engine = RetrievalQA.from_chain_type(
-                llm=self.llm,
-                chain_type="stuff",
-                retriever=self.vector_store.as_retriever(
-                    search_kwargs={"k": config.RETRIEVER_K}
-                ),
+            self.engine = build_analysis_chain(
+                self.llm,
+                self.vector_store.as_retriever(search_kwargs={"k": config.RETRIEVER_K}),
             )
         except ProviderConfigError as exc:
             logger.error("Model provider misconfigured: %s", exc)

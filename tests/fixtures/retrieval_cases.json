@@ -1,0 +1,237 @@
+{
+ "description": "Relevance labels for the retrieval evaluation (scripts/eval_retrieval.py). Each topic lists the fragments of the indexed guidance that state a requirement, definition, threshold or risk factor a reviewer would apply to a payment showing that signal. Contents pages, revision tables, abbreviation lists and passages that only describe procedures between countries are not relevant. Each case names the topics a reviewer of that case would need; its relevant fragments are the union of its topics. Cases are taken by id from the labelled case files in this folder. Fragments are identified by the id the index stores (UUID5 of the fragment text) and the zero-based page index; no guidance text is stored here. Labels were fixed from a local re-split of the document before any retrieval was run for this evaluation.",
+ "index": {"fragments": 410, "chunk_size": 1200, "chunk_overlap": 150},
+ "topics": {
+  "reporting_threshold": {
+   "description": "The designated threshold for occasional transactions, scrutiny of complex or unusually large transactions, and large cash transaction reporting.",
+   "fragments": [
+    {"id": "61585554-3b4c-5d86-adab-0858ee241e10", "page": 14},
+    {"id": "13864e9e-c607-5ecb-b939-67fe0e1113b4", "page": 72},
+    {"id": "3efe15a9-74a6-5402-b403-d81e7ce02d80", "page": 73},
+    {"id": "1acd25c9-5021-5863-a15e-28ceb09545d7", "page": 111}
+   ]
+  },
+  "structuring": {
+   "description": "Amounts kept under a threshold: the threshold and linked operations, due diligence on suspicion whatever the threshold, and reporting of suspicious and attempted transactions whatever the amount.",
+   "fragments": [
+    {"id": "61585554-3b4c-5d86-adab-0858ee241e10", "page": 14},
+    {"id": "3e60301a-a1ee-5e8b-b7d8-978acdb2f84f", "page": 19},
+    {"id": "09c96b03-963a-5dc8-822a-64d9225067ad", "page": 66},
+    {"id": "3efe15a9-74a6-5402-b403-d81e7ce02d80", "page": 73},
+    {"id": "8637c00a-6c28-5a20-9b5a-f07dbb8867a3", "page": 92},
+    {"id": "01f75e5c-fd2b-5c09-b2f2-63203ae0bc20", "page": 93}
+   ]
+  },
+  "higher_risk_country": {
+   "description": "Higher-risk countries: enhanced due diligence, countermeasures, country risk factors and the enhanced measures they refer to.",
+   "fragments": [
+    {"id": "a4e17d3d-25b4-5805-9968-4bc4e21ef976", "page": 19},
+    {"id": "9e701a0d-c52b-5ba0-889e-501bf77b1669", "page": 70},
+    {"id": "c4851990-122a-5edc-9a9c-a629ae1389a3", "page": 70},
+    {"id": "fbf1a4f7-2480-5ed2-a648-2e78937a835f", "page": 72},
+    {"id": "4ab4eda0-bd32-5193-9385-1d09609559da", "page": 73},
+    {"id": "8b79c41c-6f63-5d14-ae60-07aa3e0ebfb7", "page": 91},
+    {"id": "d2c34bc6-5b41-52d4-9170-1f27b03721f2", "page": 91},
+    {"id": "458b2af5-6af8-55aa-b30c-a5f26f33c219", "page": 91}
+   ]
+  },
+  "ownership_opacity": {
+   "description": "Who owns or controls a legal person: beneficial ownership, nominee shareholders and directors, bearer shares, complex ownership structures and geographic risk factors.",
+   "fragments": [
+    {"id": "b35bb7eb-f5cf-56b8-b2af-2870a7a0cb20", "page": 14},
+    {"id": "5896923f-1c5e-5f2c-821e-4eb6a6c3705a", "page": 22},
+    {"id": "1bd594e2-eced-5b83-b6fa-2827e383e944", "page": 22},
+    {"id": "500a45bf-4c2b-56f3-8e87-88d82c7db7c6", "page": 66},
+    {"id": "fb0e8d49-54c6-5c55-9570-08383be9498d", "page": 67},
+    {"id": "45420fca-1d62-5107-be09-5cc9cf065264", "page": 67},
+    {"id": "ef558e65-e8ea-5ad5-a398-1d4ed2f506f9", "page": 68},
+    {"id": "9e701a0d-c52b-5ba0-889e-501bf77b1669", "page": 70},
+    {"id": "dae39d27-0eff-5192-a682-bbeec4670935", "page": 99},
+    {"id": "0b839499-ff11-5179-a2a2-5073aea7e8e5", "page": 100},
+    {"id": "48cbc3a0-1353-53f8-a338-b08a4e432056", "page": 100},
+    {"id": "c8d5ba77-1321-5ddb-a7b4-2652f1868ae1", "page": 135},
+    {"id": "bcb8fe7c-b5c7-535d-b497-63450f3a23c6", "page": 136}
+   ]
+  },
+  "sanctions": {
+   "description": "Targeted financial sanctions: freezing, the prohibition on dealing with designated persons and entities, reporting of frozen assets and attempted transactions, similar-name cases and the related definitions.",
+   "fragments": [
+    {"id": "1030024d-c957-5831-9e13-df346666f0d4", "page": 13},
+    {"id": "e8fb524b-671a-5691-a0f1-f3e17fb19616", "page": 13},
+    {"id": "38dc372f-2f65-55d7-b515-6529bbdf458e", "page": 17},
+    {"id": "9659c08a-b90f-554d-a0c7-421632466813", "page": 45},
+    {"id": "5891f8a0-7746-5b17-a564-7c9a718a330f", "page": 49},
+    {"id": "a4f4d0d9-55df-51d3-b365-7e20117abf5a", "page": 49},
+    {"id": "3cb418f5-aa3b-5655-9a89-4cea64a1cacb", "page": 49},
+    {"id": "f069647e-d581-5471-b942-63c524b729d5", "page": 50},
+    {"id": "1a97f7e8-61d8-5a8b-8b62-4f18d77ca06b", "page": 50},
+    {"id": "6f21651d-b1f5-583f-aa96-e5c4d41004db", "page": 53},
+    {"id": "bbf33368-ff03-5099-a5b5-0ee9dc641ddd", "page": 55},
+    {"id": "ceec4420-c466-5a65-91ad-c53e780db0ca", "page": 56},
+    {"id": "1b8d5e91-d690-575b-97c0-d90a3946ff3e", "page": 56},
+    {"id": "c204ebd6-f092-598c-bec5-9972ece9cb25", "page": 80},
+    {"id": "fa22f1d9-d225-541b-90cc-9dbc2abb078d", "page": 130},
+    {"id": "8582c6a9-48fd-5ab2-b599-340e63ef39c0", "page": 130},
+    {"id": "f5ae936e-ce76-577d-af8f-23af13c5bbca", "page": 131},
+    {"id": "f3ba1f11-5506-5656-b696-21e6f2134cb6", "page": 133},
+    {"id": "b6a0aa9c-3026-5788-ab87-1ccea6c7a160", "page": 138}
+   ]
+  },
+  "missing_party_information": {
+   "description": "Unidentified parties: anonymous accounts and transactions, identifying the customer, and required originator and beneficiary information on a payment.",
+   "fragments": [
+    {"id": "61585554-3b4c-5d86-adab-0858ee241e10", "page": 14},
+    {"id": "b35bb7eb-f5cf-56b8-b2af-2870a7a0cb20", "page": 14},
+    {"id": "38dc372f-2f65-55d7-b515-6529bbdf458e", "page": 17},
+    {"id": "d5d1dd84-4e16-50ba-b607-26fa22d9ecc5", "page": 71},
+    {"id": "503faffe-ac09-5519-aeaf-27a47311d3aa", "page": 81},
+    {"id": "7001074f-b082-5e90-bb1f-a8bf47b3ef1c", "page": 81},
+    {"id": "336fb076-29bf-51da-abde-dc3f18ddb043", "page": 82},
+    {"id": "5496a90e-2616-584a-8012-f2fb4c79f967", "page": 84},
+    {"id": "7271663b-5fb9-5984-af83-78f2a591c340", "page": 85}
+   ]
+  },
+  "pep": {
+   "description": "Politically exposed persons: the requirements and the definition.",
+   "fragments": [
+    {"id": "b7cba8b8-16b6-59ed-868c-2765579a6d3a", "page": 16},
+    {"id": "6636a3bd-5ea4-5ddb-956c-877b7c2b46cd", "page": 16},
+    {"id": "16215c73-507a-531d-9253-800a8acb295e", "page": 75},
+    {"id": "2299f6c0-fa10-559f-a224-1d08a528d989", "page": 136},
+    {"id": "f78c3751-08f5-5982-9458-bb6f286a5197", "page": 137}
+   ]
+  },
+  "virtual_assets": {
+   "description": "Virtual assets and virtual asset service providers: the requirements and the definitions.",
+   "fragments": [
+    {"id": "c36ebb64-2e5e-54ca-8304-a34980d0b06e", "page": 17},
+    {"id": "826b2d5e-53f1-5e91-b45b-d3e4e9138986", "page": 78},
+    {"id": "04b793d7-787d-5b81-896f-cfb6e32819c9", "page": 78},
+    {"id": "506a1641-ad60-5e42-980c-f278775b0b76", "page": 79},
+    {"id": "b568c88e-7c79-52e0-927d-af212b59d675", "page": 140},
+    {"id": "48b3f96f-223f-5e0b-921d-9aa39328aed4", "page": 140},
+    {"id": "78339467-eac4-5784-a50c-cd2629dffaa3", "page": 141}
+   ]
+  },
+  "mvts_currency_exchange": {
+   "description": "Money or value transfer services and currency changing: the requirements and the definition.",
+   "fragments": [
+    {"id": "9e7de8d4-c357-568b-ae9b-5b12bb508d00", "page": 17},
+    {"id": "c36ebb64-2e5e-54ca-8304-a34980d0b06e", "page": 17},
+    {"id": "e99f47f2-9a0a-57ee-846a-096d2fb383be", "page": 23},
+    {"id": "42cdb555-2237-50d2-9a72-74e5e9555947", "page": 77},
+    {"id": "d6cdc82c-c5d5-5127-8e8c-ffdd31836ec8", "page": 86},
+    {"id": "7675a170-015e-50e6-bce0-8b04104626b7", "page": 135}
+   ]
+  },
+  "precious_metals_dealers": {
+   "description": "Dealers in precious metals and stones, and the movement of gold and precious metals.",
+   "fragments": [
+    {"id": "92f63439-e83d-5e19-9712-6ebfad4dc973", "page": 20},
+    {"id": "4a5972d8-afb3-552f-a1ae-f424416421a3", "page": 21},
+    {"id": "01f75e5c-fd2b-5c09-b2f2-63203ae0bc20", "page": 93},
+    {"id": "f8fdd286-730e-51fb-b9db-0b8d5f263f8d", "page": 116}
+   ]
+  },
+  "customer_profile_consistency": {
+   "description": "Whether a payment fits what is known of the customer: ongoing due diligence, unusual patterns with no apparent purpose, enhanced monitoring and the duty to report suspicion.",
+   "fragments": [
+    {"id": "b35bb7eb-f5cf-56b8-b2af-2870a7a0cb20", "page": 14},
+    {"id": "0c61b959-b38d-59af-88a7-93c5e88f717f", "page": 14},
+    {"id": "3e60301a-a1ee-5e8b-b7d8-978acdb2f84f", "page": 19},
+    {"id": "d5d1dd84-4e16-50ba-b607-26fa22d9ecc5", "page": 71},
+    {"id": "13864e9e-c607-5ecb-b939-67fe0e1113b4", "page": 72},
+    {"id": "fbf1a4f7-2480-5ed2-a648-2e78937a835f", "page": 72},
+    {"id": "4ab4eda0-bd32-5193-9385-1d09609559da", "page": 73},
+    {"id": "8637c00a-6c28-5a20-9b5a-f07dbb8867a3", "page": 92}
+   ]
+  },
+  "product_channel_risk": {
+   "description": "Risk from the product or channel: new technologies, anonymous or non-face-to-face transactions and payments from unknown third parties.",
+   "fragments": [
+    {"id": "c36ebb64-2e5e-54ca-8304-a34980d0b06e", "page": 17},
+    {"id": "d5d1dd84-4e16-50ba-b607-26fa22d9ecc5", "page": 71},
+    {"id": "826b2d5e-53f1-5e91-b45b-d3e4e9138986", "page": 78}
+   ]
+  },
+  "npo": {
+   "description": "Non-profit organisations: the requirement, the risk and the definition.",
+   "fragments": [
+    {"id": "dfe58338-ce13-5f61-8616-aa92907b74d7", "page": 13},
+    {"id": "332ebb5a-eb83-5de1-8f54-6bf8c160e3f2", "page": 60},
+    {"id": "59c4a9be-652f-54d9-a992-c8d1b4818b7e", "page": 60},
+    {"id": "10f5b83d-c4fe-5f29-a6a4-688d09e115c6", "page": 60},
+    {"id": "b0888f6f-0fff-590e-bba5-dd10b3df1de6", "page": 60},
+    {"id": "b5096b4a-5882-5054-9e74-e1dbcb36daec", "page": 65}
+   ]
+  },
+  "legal_professionals_real_estate": {
+   "description": "Lawyers, client money and real estate transactions.",
+   "fragments": [
+    {"id": "92f63439-e83d-5e19-9712-6ebfad4dc973", "page": 20},
+    {"id": "839441c2-a6c4-5b46-836d-88a360bfaa02", "page": 94},
+    {"id": "a2f4f3ea-a664-5ad5-9715-9d569be0d4b0", "page": 95},
+    {"id": "1efcd5f6-f864-56ef-b948-90f60d124bb0", "page": 95},
+    {"id": "124beabf-8145-5af9-a22a-0f6ee651be6c", "page": 130}
+   ]
+  },
+  "trusts": {
+   "description": "Trusts and similar legal arrangements: parties and beneficial ownership.",
+   "fragments": [
+    {"id": "1bd594e2-eced-5b83-b6fa-2827e383e944", "page": 22},
+    {"id": "7551e9b8-c558-5a70-93b3-2d91922092bf", "page": 66},
+    {"id": "ef558e65-e8ea-5ad5-a398-1d4ed2f506f9", "page": 68},
+    {"id": "22e3adbd-41ce-5ffe-bf97-68b038c437c7", "page": 102}
+   ]
+  }
+ },
+ "cases": [
+  {"id": "OT-01", "file": "llm_cases.json", "stratum": "rule_hit", "topics": ["reporting_threshold"]},
+  {"id": "OT-02", "file": "llm_cases.json", "stratum": "rule_hit", "topics": ["reporting_threshold"]},
+  {"id": "OT-03", "file": "llm_cases.json", "stratum": "rule_hit", "topics": ["reporting_threshold", "legal_professionals_real_estate"]},
+  {"id": "OT-04", "file": "llm_cases.json", "stratum": "rule_hit", "topics": ["reporting_threshold"]},
+  {"id": "OT-05", "file": "llm_cases.json", "stratum": "rule_hit", "topics": ["reporting_threshold"]},
+  {"id": "OT-06", "file": "llm_cases.json", "stratum": "rule_hit", "topics": ["reporting_threshold"]},
+  {"id": "ST-01", "file": "llm_cases.json", "stratum": "rule_hit", "topics": ["structuring"]},
+  {"id": "ST-02", "file": "llm_cases.json", "stratum": "rule_hit", "topics": ["structuring", "mvts_currency_exchange"]},
+  {"id": "ST-03", "file": "llm_cases.json", "stratum": "rule_hit", "topics": ["structuring"]},
+  {"id": "ST-04", "file": "llm_cases.json", "stratum": "rule_hit", "topics": ["structuring"]},
+  {"id": "HR-01", "file": "llm_cases.json", "stratum": "rule_hit", "topics": ["higher_risk_country", "sanctions"]},
+  {"id": "HR-02", "file": "llm_cases.json", "stratum": "rule_hit", "topics": ["reporting_threshold", "higher_risk_country", "sanctions"]},
+  {"id": "HR-03", "file": "llm_cases.json", "stratum": "rule_hit", "topics": ["higher_risk_country", "missing_party_information"]},
+  {"id": "HR-04", "file": "llm_cases.json", "stratum": "rule_hit", "topics": ["ownership_opacity", "sanctions", "virtual_assets"]},
+  {"id": "LS-01", "file": "llm_cases.json", "stratum": "rule_hit", "topics": ["ownership_opacity"]},
+  {"id": "LS-02", "file": "llm_cases.json", "stratum": "rule_hit", "topics": ["ownership_opacity", "missing_party_information"]},
+  {"id": "LS-03", "file": "llm_cases.json", "stratum": "rule_hit", "topics": ["ownership_opacity"]},
+  {"id": "H-08", "file": "llm_cases_heldout.json", "stratum": "rule_hit", "topics": ["reporting_threshold"]},
+  {"id": "H-09", "file": "llm_cases_heldout.json", "stratum": "rule_hit", "topics": ["reporting_threshold"]},
+  {"id": "H-10", "file": "llm_cases_heldout.json", "stratum": "rule_hit", "topics": ["reporting_threshold"]},
+  {"id": "H-11", "file": "llm_cases_heldout.json", "stratum": "rule_hit", "topics": ["structuring", "mvts_currency_exchange"]},
+  {"id": "H-12", "file": "llm_cases_heldout.json", "stratum": "rule_hit", "topics": ["structuring", "mvts_currency_exchange"]},
+  {"id": "H-13", "file": "llm_cases_heldout.json", "stratum": "rule_hit", "topics": ["structuring", "precious_metals_dealers"]},
+  {"id": "H-14", "file": "llm_cases_heldout.json", "stratum": "rule_hit", "topics": ["higher_risk_country"]},
+  {"id": "H-15", "file": "llm_cases_heldout.json", "stratum": "rule_hit", "topics": ["reporting_threshold", "higher_risk_country"]},
+  {"id": "H-16", "file": "llm_cases_heldout.json", "stratum": "rule_hit", "topics": ["higher_risk_country", "precious_metals_dealers"]},
+  {"id": "H-17", "file": "llm_cases_heldout.json", "stratum": "rule_hit", "topics": ["sanctions"]},
+  {"id": "H-18", "file": "llm_cases_heldout.json", "stratum": "rule_hit", "topics": ["sanctions", "virtual_assets"]},
+  {"id": "H-19", "file": "llm_cases_heldout.json", "stratum": "rule_hit", "topics": ["sanctions"]},
+  {"id": "H-20", "file": "llm_cases_heldout.json", "stratum": "rule_hit", "topics": ["ownership_opacity"]},
+  {"id": "H-21", "file": "llm_cases_heldout.json", "stratum": "rule_hit", "topics": ["ownership_opacity"]},
+  {"id": "N-01", "file": "llm_cases_norule.json", "stratum": "no_rule", "topics": ["ownership_opacity"]},
+  {"id": "N-02", "file": "llm_cases_norule.json", "stratum": "no_rule", "topics": ["ownership_opacity"]},
+  {"id": "N-03", "file": "llm_cases_norule.json", "stratum": "no_rule", "topics": ["higher_risk_country"]},
+  {"id": "N-04", "file": "llm_cases_norule.json", "stratum": "no_rule", "topics": ["higher_risk_country"]},
+  {"id": "N-05", "file": "llm_cases_norule.json", "stratum": "no_rule", "topics": ["pep"]},
+  {"id": "N-06", "file": "llm_cases_norule.json", "stratum": "no_rule", "topics": ["pep", "trusts"]},
+  {"id": "N-07", "file": "llm_cases_norule.json", "stratum": "no_rule", "topics": ["customer_profile_consistency"]},
+  {"id": "N-08", "file": "llm_cases_norule.json", "stratum": "no_rule", "topics": ["customer_profile_consistency", "product_channel_risk"]},
+  {"id": "N-09", "file": "llm_cases_norule.json", "stratum": "no_rule", "topics": ["virtual_assets", "customer_profile_consistency"]},
+  {"id": "N-10", "file": "llm_cases_norule.json", "stratum": "no_rule", "topics": ["customer_profile_consistency", "precious_metals_dealers"]},
+  {"id": "N-11", "file": "llm_cases_norule.json", "stratum": "no_rule", "topics": ["customer_profile_consistency"]},
+  {"id": "N-12", "file": "llm_cases_norule.json", "stratum": "no_rule", "topics": ["virtual_assets"]},
+  {"id": "N-13", "file": "llm_cases_norule.json", "stratum": "rule_hit", "topics": ["reporting_threshold", "legal_professionals_real_estate"]},
+  {"id": "N-14", "file": "llm_cases_norule.json", "stratum": "rule_hit", "topics": ["reporting_threshold"]},
+  {"id": "N-15", "file": "llm_cases_norule.json", "stratum": "rule_hit", "topics": ["reporting_threshold"]},
+  {"id": "N-17", "file": "llm_cases_norule.json", "stratum": "rule_hit", "topics": ["reporting_threshold", "npo"]}
+ ]
+}

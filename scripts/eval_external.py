@@ -54,6 +54,7 @@ import config  # noqa: E402
 from evaluate import metrics, wilson_interval  # noqa: E402
 from utils.data_loader import load_ledger  # noqa: E402
 from utils.funnel import run_funnel  # noqa: E402
+from utils.rule_ids import NOTES, RULE_REASONS, rule_id  # noqa: E402,F401
 from utils.rules import apply_rules  # noqa: E402
 
 IBM_HEADER = [
@@ -72,29 +73,6 @@ RULE_RANK_OFFSET = 10.0
 _TIME_FORMAT = "%Y/%m/%d %H:%M"
 MIN_POSITIVES = 30
 DEFAULT_KS = [100, 500, 1000]
-
-# Text unique to each reason utils.rules.evaluate_row writes. Matched as a
-# substring; "reporting threshold" alone would also match the structuring band.
-RULE_REASONS = {
-    "reporting_threshold": "is at or above the",
-    "structuring_band": "sits in the structuring band",
-    "high_risk_country": "is on the high-risk list",
-    "secrecy_jurisdiction": "is a recognised secrecy jurisdiction",
-    "sanctions_name": "matches sanctions list entry",
-    "unidentified_parties": "Both counterparties are unidentified",
-    "unresolved_jurisdiction": "Unresolved jurisdiction",
-    "self_transfer": "Self-transfer: sender and receiver are the same account",
-    "non_cash_channel": "is not a cash channel",
-}
-# Low-severity notes: reported with the reasons but never forward a row.
-NOTES = {"unresolved_jurisdiction", "self_transfer", "non_cash_channel"}
-
-
-def rule_id(reason: str) -> str:
-    for rid, text in RULE_REASONS.items():
-        if text in reason:
-            return rid
-    return "other"
 
 
 def _breakdown_row(source: str, fired: pd.Series, truth: pd.Series, investigate: pd.Series,
