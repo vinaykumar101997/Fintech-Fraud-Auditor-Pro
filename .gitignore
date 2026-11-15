@@ -4,6 +4,8 @@
 !tests/fixtures/llm_cases.json
 !tests/fixtures/llm_cases_heldout.json
 !tests/fixtures/llm_cases_norule.json
+# Relevance labels for scripts/eval_retrieval.py (fragment ids and pages only).
+!tests/fixtures/retrieval_cases.json
 !package.json
 gcp-key*.json
 .aws/

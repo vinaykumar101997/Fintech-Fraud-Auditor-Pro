@@ -89,6 +89,14 @@ def is_blank(value: object) -> bool:
     return _normalise(value) in _EMPTY
 
 
+def country_name(code: Optional[str]) -> Optional[str]:
+    """Everyday name for an alpha-2 code ("Iran", not "Iran, Islamic Republic of")."""
+    country = pycountry.countries.get(alpha_2=code) if code else None
+    if country is None:
+        return None
+    return getattr(country, "common_name", None) or country.name
+
+
 def resolve_country(value: object) -> Optional[str]:
     """Return the alpha-2 code for a country name or code, or None if unresolved."""
     key = _normalise(value)

@@ -32,6 +32,24 @@ logging.basicConfig(level=config.LOG_LEVEL)
 logger = logging.getLogger(__name__)
 
 EMBED_BATCH_SIZE = 64
+CHUNK_SIZE = 1200
+CHUNK_OVERLAP = 150
+
+
+def fragment_id(text: str) -> str:
+    """Deterministic point id from the fragment text, so re-ingestion updates
+    rather than duplicating."""
+    return str(uuid.uuid5(uuid.NAMESPACE_DNS, text))
+
+
+def split_pdf(file_path: Path, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> list:
+    """The document as the fragments that get indexed, in order. No network."""
+    documents = PyMuPDFLoader(str(file_path)).load()
+    chunks = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size, chunk_overlap=overlap,
+        separators=["\n\n", "\n", ". ", " "],
+    ).split_documents(documents)
+    return [d for d in chunks if d.page_content.strip()]
 
 
 class DocumentIngestionEngine:
@@ -69,19 +87,15 @@ class DocumentIngestionEngine:
             logger.info("Embedded %d/%d fragments", len(vectors), len(texts))
         return vectors
 
-    def process_pdf(self, file_path: Path, chunk_size: int = 1200, overlap: int = 150) -> int:
+    def process_pdf(self, file_path: Path, chunk_size: int = CHUNK_SIZE,
+                    overlap: int = CHUNK_OVERLAP) -> int:
         if not file_path.exists():
             raise SystemExit(f"Source file not found: {file_path}")
 
         logger.info("Processing %s", file_path)
-        documents = PyMuPDFLoader(str(file_path)).load()
-        chunks = RecursiveCharacterTextSplitter(
-            chunk_size=chunk_size, chunk_overlap=overlap,
-            separators=["\n\n", "\n", ". ", " "],
-        ).split_documents(documents)
-
-        texts = [d.page_content for d in chunks if d.page_content.strip()]
-        metadatas = [d.metadata for d in chunks if d.page_content.strip()]
+        chunks = split_pdf(file_path, chunk_size, overlap)
+        texts = [d.page_content for d in chunks]
+        metadatas = [d.metadata for d in chunks]
         if not texts:
             raise SystemExit("No extractable text. Is this a scanned PDF? Run OCR first.")
 
@@ -90,9 +104,7 @@ class DocumentIngestionEngine:
 
         points = [
             PointStruct(
-                # Deterministic ID from content, so re-ingestion updates rather
-                # than duplicating.
-                id=str(uuid.uuid5(uuid.NAMESPACE_DNS, text)),
+                id=fragment_id(text),
                 vector={"text-dense": vector},
                 payload={"page_content": text, "metadata": meta, "source_file": file_path.name},
             )

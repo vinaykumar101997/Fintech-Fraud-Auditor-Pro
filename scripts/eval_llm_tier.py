@@ -177,7 +177,7 @@ class FakeLLM:
 
 
 class FakeRetrievalQA:
-    """Stands in for the RetrievalQA chain: fixed passages, one model call."""
+    """Stands in for the retrieval chain: fixed passages, one model call."""
 
     def __init__(self, llm: FakeLLM, passages: int = 5):
         self.llm = llm
@@ -209,8 +209,8 @@ def passage_id(doc) -> str:
 class PassageRecorder:
     """Wraps the retrieval chain and keeps the passages of its last answer.
 
-    The live chain does not return its source documents, so a retriever
-    callback records them; the fake chain returns them in its result.
+    Both the live chain and the fake one return their source documents; the
+    retriever callback keeps the passages when a chain does not.
     """
 
     def __init__(self, chain):
