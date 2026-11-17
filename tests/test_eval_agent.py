@@ -291,6 +291,25 @@ def test_pause_waits_after_every_model_call():
     assert waits == [3.0, 3.0]
 
 
+def test_meter_lists_each_call_and_counts_a_cut_off_reply():
+    from types import SimpleNamespace
+
+    from utils.llm_provider import OutputTruncated
+
+    meter = harness.usage_meter(harness.CallBudget())
+    answered = SimpleNamespace(
+        message=SimpleNamespace(usage_metadata={"input_tokens": 100, "output_tokens": 20,
+                                                "total_tokens": 150}),
+        generation_info={"finish_reason": "STOP"})
+    meter.on_llm_end(SimpleNamespace(generations=[[answered]]))
+    meter.on_llm_error(OutputTruncated({"input_tokens": 100, "output_tokens": 0,
+                                        "total_tokens": 4196}))
+    meter.on_llm_error(RuntimeError("503"))  # no usage: nothing was billed
+    assert meter.calls == [{"output_tokens": 50, "finish_reason": "STOP"},
+                           {"output_tokens": 4096, "finish_reason": "MAX_TOKENS"}]
+    assert (meter.input_tokens, meter.output_tokens) == (200, 4146)
+
+
 def test_guidance_cache_serves_a_repeated_query_without_the_index(tmp_path):
     inner = harness.FakeRetriever()
     calls = []

@@ -28,7 +28,9 @@ is dropped and the cases completed so far are reported.
 --cases-out appends one JSON row per finished case (verdict, confidence, the
 reviewer's rationale, error detail, the rule reasons sent, retrieved passage
 ids, calls, tokens, seconds) and flushes it at once, so an early stop or a
-crash keeps every case finished before it.
+crash keeps every case finished before it. A live row also lists each model
+call's billed output tokens and finish reason; a reply cut off at the output
+limit is listed with MAX_TOKENS.
 
 Each case is passed to the engine with exactly the arguments the app passes:
 the transaction fields and the rule reasons. The behaviour-model flags in the
@@ -391,6 +393,8 @@ def usage_meter(budget: CallBudget, pause: float = 0.0, sleep=time.sleep):
         def __init__(self):
             self.input_tokens = 0
             self.output_tokens = 0
+            # One entry per answered call: billed output tokens and why it stopped.
+            self.calls: List[Dict[str, Any]] = []
 
         def on_chat_model_start(self, *args, **kwargs):
             budget.spend()
@@ -398,16 +402,28 @@ def usage_meter(budget: CallBudget, pause: float = 0.0, sleep=time.sleep):
         def on_llm_start(self, *args, **kwargs):
             budget.spend()
 
+        def _count(self, usage, finish_reason) -> None:
+            # Reasoning tokens are billed as output (utils.trace.billed_tokens).
+            tokens_in, tokens_out = billed_tokens(usage)
+            self.input_tokens += tokens_in
+            self.output_tokens += tokens_out
+            self.calls.append({"output_tokens": tokens_out, "finish_reason": finish_reason})
+
         def on_llm_end(self, response, **kwargs):
             for generations in response.generations:
                 for gen in generations:
-                    # Reasoning tokens are billed as output (utils.trace.billed_tokens).
-                    tokens_in, tokens_out = billed_tokens(
-                        getattr(getattr(gen, "message", None), "usage_metadata", None))
-                    self.input_tokens += tokens_in
-                    self.output_tokens += tokens_out
+                    self._count(getattr(getattr(gen, "message", None), "usage_metadata", None),
+                                (getattr(gen, "generation_info", None) or {}).get("finish_reason"))
             if pause > 0:
                 sleep(pause)
+
+        def on_llm_error(self, error, **kwargs):
+            # A reply cut off at the output limit is raised, not returned
+            # (utils.llm_provider.OutputTruncated); it was still billed.
+            if hasattr(error, "usage"):
+                self._count(error.usage, "MAX_TOKENS")
+                if pause > 0:
+                    sleep(pause)
 
     return UsageMeter()
 
@@ -533,6 +549,7 @@ def run_cases(cases, engine, rag_engine, budget: CallBudget, fake: Optional[Fake
             fake.case = case
         calls_before = budget.used
         tokens_before = (meter.input_tokens, meter.output_tokens) if meter is not None else None
+        answered_before = len(meter.calls) if meter is not None else 0
         started = time.perf_counter()
         txn = case["transaction"]
         # The record always shows the case id. A ledger-backed case is looked up
@@ -583,6 +600,8 @@ def run_cases(cases, engine, rag_engine, budget: CallBudget, fake: Optional[Fake
                 passages = recorder.documents if recorder else []
             row = case_row(case, outcome, passages, budget.used - calls_before, tokens, seconds,
                            engine_kind=engine_kind)
+            if meter is not None:
+                row["calls"] = meter.calls[answered_before:]
             cases_out.write(json.dumps(row, ensure_ascii=False) + "\n")
             cases_out.flush()
         if progress:

@@ -84,7 +84,37 @@ def _bedrock_embeddings() -> Any:
 # --------------------------------------------------------------------------
 # Vertex AI
 # --------------------------------------------------------------------------
-def _vertex_chat() -> Any:
+class OutputTruncated(RuntimeError):
+    """A reply cut off at the output token limit. Transient to utils.retry.
+
+    `usage` is the reply's token usage, so a meter can still count the call.
+    """
+
+    def __init__(self, usage: Any = None):
+        super().__init__("Model reply was cut off at the output token limit (MAX_TOKENS).")
+        self.usage = usage
+
+
+TRUNCATION_SHARE = 0.99
+
+
+def reject_truncated(result: Any, cap: Any = None) -> Any:
+    """Return a chat result unchanged, or raise if a reply in it was cut off.
+
+    A cut-off reply can still parse (a complete verdict, half a finding), so
+    without this it would be used as if the model had finished.
+    """
+    for generation in result.generations:
+        usage = getattr(generation.message, "usage_metadata", None)
+        if (generation.generation_info or {}).get("finish_reason") == "MAX_TOKENS":
+            raise OutputTruncated(usage)
+        # Seen live: capped replies billed 8,183 of 8,192 tokens (reasoning included) with finish reason STOP.
+        if cap and (usage or {}).get("output_tokens", 0) >= TRUNCATION_SHARE * cap:
+            raise OutputTruncated(usage)
+    return result
+
+
+def _vertex_chat(narrative: bool = False) -> Any:
     try:
         from langchain_google_vertexai import ChatVertexAI
     except ImportError as exc:
@@ -93,12 +123,24 @@ def _vertex_chat() -> Any:
     if not config.GCP_PROJECT_ID:
         raise ProviderConfigError("GCP_PROJECT_ID is not set.")
 
-    return ChatVertexAI(
+    # shortcut: only the synchronous path is guarded, guard _agenerate too if async calls are added
+    class GuardedChatVertexAI(ChatVertexAI):
+        def _generate(self, *args: Any, **kwargs: Any) -> Any:
+            return reject_truncated(super()._generate(*args, **kwargs), self.max_output_tokens)
+
+    kwargs = {}
+    if not narrative and config.VERTEX_THINKING_BUDGET is not None:
+        kwargs["thinking_budget"] = config.VERTEX_THINKING_BUDGET
+    return GuardedChatVertexAI(
         model_name=config.VERTEX_CHAT_MODEL,
         project=config.GCP_PROJECT_ID,
         location=config.GCP_LOCATION,
         temperature=config.LLM_TEMPERATURE,
         max_retries=VERTEX_MAX_RETRIES,
+        max_output_tokens=(config.VERTEX_NARRATIVE_MAX_OUTPUT_TOKENS if narrative
+                           else config.VERTEX_MAX_OUTPUT_TOKENS),
+        timeout=config.VERTEX_TIMEOUT_SECONDS,
+        **kwargs,
     )
 
 
@@ -128,6 +170,15 @@ def get_chat_model() -> Any:
         )
     logger.info("Chat model: %s via %s", config.chat_model_name(), provider)
     return _CHAT[provider]()
+
+
+def get_narrative_model(review_model: Any) -> Any:
+    """Model for the SAR draft and chat answers.
+
+    On Vertex a second client with the higher output limit
+    (VERTEX_NARRATIVE_MAX_OUTPUT_TOKENS); otherwise the review model itself.
+    """
+    return _vertex_chat(narrative=True) if config.MODEL_PROVIDER == "vertex" else review_model
 
 
 def get_embeddings() -> Any:
