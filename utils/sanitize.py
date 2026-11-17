@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import html
 import re
-from typing import Mapping
+from typing import Mapping, Optional
 
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _FENCE = re.compile(r"[`]{3,}|<\|.*?\|>|\[/?INST\]|</?(system|assistant|user)>", re.I)
@@ -56,13 +56,20 @@ def scrub(value, max_length: int = MAX_FIELD_LENGTH) -> str:
     return text
 
 
-def build_evidence_block(fields: Mapping[str, object]) -> str:
+def build_evidence_block(fields: Mapping[str, object],
+                         max_lengths: Optional[Mapping[str, int]] = None) -> str:
     """Render untrusted fields inside an explicit, labelled fence.
 
     Values are HTML-escaped (&, < and >) after scrubbing, so no field can
-    open or close a tag, including </transaction_record> itself.
+    open or close a tag, including </transaction_record> itself. Each value
+    is cut at MAX_FIELD_LENGTH unless `max_lengths` gives that field another
+    limit.
     """
-    lines = [f"- {key}: {html.escape(scrub(val), quote=False)}" for key, val in fields.items()]
+    limits = max_lengths or {}
+    lines = [
+        f"- {key}: {html.escape(scrub(val, limits.get(key, MAX_FIELD_LENGTH)), quote=False)}"
+        for key, val in fields.items()
+    ]
     return (
         "<transaction_record>\n"
         + "\n".join(lines)

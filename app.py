@@ -34,6 +34,7 @@ from utils.funnel import explain_row, run_funnel  # noqa: E402
 from utils.llm_provider import describe as provider_description  # noqa: E402
 from utils.graph_logic import HUMAN_NODE, build_compliance_graph, thread_config  # noqa: E402
 from utils.graph_nodes import initial_state, network_history_from_ledger  # noqa: E402
+from utils.investigation import InvestigationEngine  # noqa: E402
 from utils.rules import apply_rules, sanctions_hit_events  # noqa: E402
 from utils.sar_gate import (  # noqa: E402
     OFFICER_DECISIONS,
@@ -83,9 +84,20 @@ def get_backends():
     function, so a transient failure is retryable rather than sticky."""
     try:
         provider = ComplianceIntelligenceProvider()
+        if config.REVIEW_MODE == "agent":
+            return provider, InvestigationEngine(llm=provider.llm), None
         return provider, ComplianceAuditEngine(llm=provider.llm), None
     except (ProviderUnavailable, ValueError) as exc:
         return None, None, str(exc)
+
+
+def trace_note(outcome) -> str | None:
+    """'agent review: 3 lookups (search_guidance, ...), 4 model calls' for the audit trail."""
+    trace = getattr(outcome, "trace", None)
+    if trace is None:
+        return None
+    tools = ", ".join(trace.tools_called) or "none"
+    return f"agent review: {trace.tool_calls} lookups ({tools}), {trace.model_calls} model calls"
 
 
 def new_batch_id() -> str:
@@ -95,14 +107,22 @@ def new_batch_id() -> str:
 # --------------------------------------------------------------------------
 # Tier 2 execution
 # --------------------------------------------------------------------------
-def assess_batch(flagged: pd.DataFrame, engine, provider, batch_id: str) -> pd.DataFrame:
-    """Run the LLM tier across flagged rows in parallel, with a result cache."""
+def assess_batch(flagged: pd.DataFrame, engine, provider, batch_id: str,
+                 ledger: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Run the LLM tier across flagged rows in parallel, with a result cache.
+
+    In agent mode the review also reads `ledger` (the full loaded batch) for
+    account history, and fewer reviews run at once (AGENT_MAX_WORKERS).
+    """
     cache = st.session_state.setdefault("verdict_cache", {})
     rows = flagged.to_dict("records")
+    agent_mode = config.REVIEW_MODE == "agent"
 
     def key_for(row) -> str:
         return evidence_hash(
             {
+                # A verdict from one review mode is never served for the other.
+                "review_mode": config.REVIEW_MODE,
                 "amount": str(row["amount"]),
                 "country": row.get("country", ""),
                 "sender": row.get("sender", ""),
@@ -115,6 +135,8 @@ def assess_batch(flagged: pd.DataFrame, engine, provider, batch_id: str) -> pd.D
         cache_key = key_for(row)
         if cache_key in cache:
             return row["transaction_id"], cache[cache_key], True
+        extra = ({"ledger": ledger, "retriever": getattr(provider, "retriever", None)}
+                 if agent_mode else {})
         outcome = engine.assess_transaction(
             transaction_id=row["transaction_id"],
             amount=abs(row["amount"]),
@@ -123,12 +145,14 @@ def assess_batch(flagged: pd.DataFrame, engine, provider, batch_id: str) -> pd.D
             receiver=row.get("receiver", ""),
             rule_reasons=row.get("rule_reasons"),
             rag_engine=getattr(provider, "engine", None),
+            **extra,
         )
         cache[cache_key] = outcome
         return row["transaction_id"], outcome, False
 
     results, progress, done = {}, st.progress(0.0, text="Assessing flagged transactions..."), 0
-    with ThreadPoolExecutor(max_workers=config.LLM_MAX_WORKERS) as pool:
+    workers = config.AGENT_MAX_WORKERS if agent_mode else config.LLM_MAX_WORKERS
+    with ThreadPoolExecutor(max_workers=max(workers, 1)) as pool:
         for txn_id, outcome, was_cached in pool.map(work, rows):
             results[txn_id] = outcome
             done += 1
@@ -141,7 +165,7 @@ def assess_batch(flagged: pd.DataFrame, engine, provider, batch_id: str) -> pd.D
                 verdict=outcome.verdict.value,
                 rationale=outcome.rationale,
                 model_name=config.chat_model_name(),
-                detail="cache hit" if was_cached else outcome.error_detail,
+                detail="cache hit" if was_cached else (outcome.error_detail or trace_note(outcome)),
             )
     progress.empty()
 
@@ -292,7 +316,7 @@ def render_ingestion(engine, provider):
         return
 
     try:
-        assessed = assess_batch(result.flagged, engine, provider, batch_id)
+        assessed = assess_batch(result.flagged, engine, provider, batch_id, ledger=ledger)
     except AuditWriteError as exc:
         # Verdicts that cannot be recorded are not released to the analyst.
         st.error(str(exc))

@@ -255,3 +255,50 @@ def test_batch_sanctions_hit_write_failure_blocks_the_batch(db, sanctioned_ledge
     assert "sanctions_hit" in _texts(at.error)
     assert "audit_results" not in at.session_state
     assert FakeEngine.assessed == []  # no LLM spend on an unrecorded batch
+
+
+# --- agent review mode ----------------------------------------------------------
+class FakeAgent:
+    """Stands in for utils.investigation.InvestigationEngine; records what it is given."""
+
+    calls = []
+
+    def __init__(self, llm=None):
+        pass
+
+    def assess_transaction(self, *, transaction_id, rule_reasons=None, ledger=None,
+                           retriever=None, **_):
+        from utils.trace import Trace, TraceStep
+
+        FakeAgent.calls.append({"id": transaction_id, "ledger_rows": len(ledger)})
+        trace = Trace(stop_reason="answered")
+        trace.add(TraceStep(kind="tool", name="party_history"))
+        verdict = Verdict.SUSPICIOUS if rule_reasons else Verdict.CLEAR
+        return AuditOutcome(verdict=verdict, rationale="Fake agent.", confidence=0.9, trace=trace)
+
+
+def test_agent_mode_reviews_with_the_ledger_and_is_not_served_fixed_verdicts(db, monkeypatch):
+    from utils import investigation
+
+    monkeypatch.setattr(investigation, "InvestigationEngine", FakeAgent)
+    FakeAgent.calls = []
+    at = _run_audit(db)                       # fixed mode first
+    fixed_reviewed = set(FakeEngine.assessed)
+    assert fixed_reviewed and FakeAgent.calls == []
+
+    monkeypatch.setattr(config, "REVIEW_MODE", "agent")
+    st.cache_resource.clear()                 # get_backends picks the engine for the mode
+    at.session_state["audit_results"] = None  # back to the ingestion page, same session
+    at.run()
+    checkbox = next(c for c in at.checkbox if c.label == "Use the bundled sample ledger")
+    if not checkbox.value:
+        checkbox.check().run()
+    _button(at, "Run audit").click().run()
+    assert not at.exception, at.exception
+    reviewed = {c["id"] for c in FakeAgent.calls}
+    assert reviewed == fixed_reviewed         # the fixed verdicts in the cache were not reused
+    ledger_rows = len(at.session_state["ledger"])
+    assert all(c["ledger_rows"] == ledger_rows for c in FakeAgent.calls)
+    target = sorted(reviewed)[0]
+    details = [e["detail"] for e in audit_log.history(target, db) if e["stage"] == "tier2_assessment"]
+    assert details[-1] == "agent review: 1 lookups (party_history), 0 model calls"

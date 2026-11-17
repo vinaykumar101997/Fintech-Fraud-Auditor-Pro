@@ -206,4 +206,25 @@ LLM_RETRY_BASE_DELAY = float(os.getenv("LLM_RETRY_BASE_DELAY", "1.5"))
 LLM_RATE_LIMIT_BASE_DELAY = float(os.getenv("LLM_RATE_LIMIT_BASE_DELAY", "5"))
 LLM_RETRY_MAX_WAIT = float(os.getenv("LLM_RETRY_MAX_WAIT", "60"))
 MAX_LEDGER_ROWS = int(os.getenv("MAX_LEDGER_ROWS", "50000"))
+
+# --- Tier 2 review mode ---
+# "fixed": one retrieval call, then the structured review (the default).
+# "agent": the model chooses read-only lookups (utils/agent_tools.py) under the
+# caps below, then the same structured review returns the verdict
+# (utils/investigation.py). Reaching any cap ends the review with ERROR.
+REVIEW_MODES = ("fixed", "agent")
+REVIEW_MODE = os.getenv("REVIEW_MODE", "fixed").strip().lower()
+if REVIEW_MODE not in REVIEW_MODES:
+    raise ValueError(f"REVIEW_MODE={REVIEW_MODE!r} is not one of: {', '.join(REVIEW_MODES)}")
+# Model calls in the investigation, the last one (the notes, no tool call) included.
+AGENT_MAX_MODEL_CALLS = int(os.getenv("AGENT_MAX_MODEL_CALLS", "6"))
+AGENT_MAX_TOOL_CALLS = int(os.getenv("AGENT_MAX_TOOL_CALLS", "8"))
+# Tokens over the whole investigation (the final review is not counted).
+AGENT_MAX_INPUT_TOKENS = int(os.getenv("AGENT_MAX_INPUT_TOKENS", "40000"))
+AGENT_MAX_OUTPUT_TOKENS = int(os.getenv("AGENT_MAX_OUTPUT_TOKENS", "8000"))
+# Longest tool result passed back to the model, in characters.
+AGENT_TOOL_RESULT_CHARS = int(os.getenv("AGENT_TOOL_RESULT_CHARS", "9000"))
+# An agent review makes several model calls, so fewer run at once than in
+# fixed mode (LLM_MAX_WORKERS) to stay inside per-minute quotas.
+AGENT_MAX_WORKERS = int(os.getenv("AGENT_MAX_WORKERS", "1"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")

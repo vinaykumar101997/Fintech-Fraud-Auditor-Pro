@@ -17,7 +17,7 @@ now come back through a constrained schema.
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 from langchain_core.prompts import ChatPromptTemplate
 
@@ -42,19 +42,30 @@ _REVIEWER_SYSTEM = (
 )
 
 
+# Longest value of a behaviour-signal field in the record (one party's
+# account history as JSON is about 1,500 characters).
+SIGNAL_FIELD_CHARS = 2500
+
+
 def evidence_block(*, transaction_id, amount, country, sender="", receiver="",
-                   rule_reasons: Optional[list] = None) -> str:
-    """The fenced transaction record both steps of the review are given."""
-    return build_evidence_block(
-        {
-            "transaction_id": transaction_id,
-            "amount": f"{amount:,.2f}",
-            "counterparty_jurisdiction": country,
-            "originator": sender,
-            "beneficiary": receiver,
-            "deterministic_rule_hits": "; ".join(rule_reasons or []) or "none",
-        }
-    )
+                   rule_reasons: Optional[list] = None,
+                   behaviour_signals: Optional[Mapping[str, str]] = None) -> str:
+    """The fenced transaction record both steps of the review are given.
+
+    `behaviour_signals` adds fields after the rule hits (for example each
+    party's account history); without it the record is unchanged.
+    """
+    fields = {
+        "transaction_id": transaction_id,
+        "amount": f"{amount:,.2f}",
+        "counterparty_jurisdiction": country,
+        "originator": sender,
+        "beneficiary": receiver,
+        "deterministic_rule_hits": "; ".join(rule_reasons or []) or "none",
+    }
+    signals = dict(behaviour_signals or {})
+    fields.update(signals)
+    return build_evidence_block(fields, {key: SIGNAL_FIELD_CHARS for key in signals})
 
 
 class ComplianceAuditEngine:
@@ -93,11 +104,13 @@ class ComplianceAuditEngine:
         receiver: str = "",
         rule_reasons: Optional[list] = None,
         rag_engine: Any = None,
+        behaviour_signals: Optional[Mapping[str, str]] = None,
     ) -> AuditOutcome:
         """Assess one transaction. Always returns an AuditOutcome, never raises."""
         evidence = evidence_block(
             transaction_id=transaction_id, amount=amount, country=country,
             sender=sender, receiver=receiver, rule_reasons=rule_reasons,
+            behaviour_signals=behaviour_signals,
         )
 
         try:
@@ -121,40 +134,50 @@ class ComplianceAuditEngine:
                 finding = "Retrieval returned no usable context."
 
             # Stage 2: independent structured review.
-            assessment: TransactionAssessment = self._with_retry(
-                lambda: self._reviewer.invoke({"evidence": evidence, "finding": scrub(finding, 2000)}),
-                "compliance review",
-            )
-
-            if assessment is None:
-                return AuditOutcome.failure("Reviewer returned no structured assessment.")
-
-            if assessment.injection_attempt_observed:
-                logger.warning(
-                    "Possible prompt injection in transaction %s; escalating.", transaction_id
-                )
-                return AuditOutcome(
-                    verdict=Verdict.SUSPICIOUS,
-                    rationale=(
-                        "The transaction record contained text attempting to manipulate the "
-                        "analysis. Escalated for manual review. "
-                        + assessment.rationale
-                    ),
-                    confidence=max(assessment.confidence, 0.9),
-                    typology="data manipulation attempt",
-                    initial_finding=finding,
-                    reviewer_note=assessment.rationale,
-                )
-
-            return AuditOutcome(
-                verdict=Verdict(assessment.verdict),
-                rationale=assessment.rationale,
-                confidence=assessment.confidence,
-                typology=assessment.primary_typology,
-                initial_finding=finding,
-                reviewer_note=assessment.rationale,
-            )
+            return self._review(evidence, finding, transaction_id)
 
         except Exception as exc:  # noqa: BLE001
             logger.error("Audit failed for %s: %s", transaction_id, exc)
             return AuditOutcome.failure(f"{type(exc).__name__}: {exc}")
+
+    def _review(self, evidence: str, finding: str, transaction_id: str,
+                finding_chars: int = 2000) -> AuditOutcome:
+        """The independent structured review of a finding. May raise; callers catch.
+
+        Shared by the fixed review above and the investigation agent
+        (utils/investigation.py), so both reach a verdict the same way.
+        """
+        assessment: TransactionAssessment = self._with_retry(
+            lambda: self._reviewer.invoke({"evidence": evidence,
+                                           "finding": scrub(finding, finding_chars)}),
+            "compliance review",
+        )
+
+        if assessment is None:
+            return AuditOutcome.failure("Reviewer returned no structured assessment.")
+
+        if assessment.injection_attempt_observed:
+            logger.warning(
+                "Possible prompt injection in transaction %s; escalating.", transaction_id
+            )
+            return AuditOutcome(
+                verdict=Verdict.SUSPICIOUS,
+                rationale=(
+                    "The transaction record contained text attempting to manipulate the "
+                    "analysis. Escalated for manual review. "
+                    + assessment.rationale
+                ),
+                confidence=max(assessment.confidence, 0.9),
+                typology="data manipulation attempt",
+                initial_finding=finding,
+                reviewer_note=assessment.rationale,
+            )
+
+        return AuditOutcome(
+            verdict=Verdict(assessment.verdict),
+            rationale=assessment.rationale,
+            confidence=assessment.confidence,
+            typology=assessment.primary_typology,
+            initial_finding=finding,
+            reviewer_note=assessment.rationale,
+        )

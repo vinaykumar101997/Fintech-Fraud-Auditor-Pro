@@ -1,0 +1,995 @@
+{
+  "description": "Tool labels for the investigation agent (utils/investigation.py), written before any agent output existed. For each case: the tools a careful analyst would need (required) and the tools that only check or restate what the record already says (acceptable). Any other tool called counts as unnecessary. Covers the development, held-out and no-rule sets and the ledger-backed set.",
+  "tools": [
+    "screen_party",
+    "country_risk",
+    "explain_rule",
+    "party_history",
+    "search_guidance"
+  ],
+  "policy": [
+    "required: the decision depends on information the record does not state, and the tool returns it.",
+    "acceptable: the tool only checks or restates what the record states, or gives context a careful analyst may reasonably consult.",
+    "search_guidance: required when the expected verdict is SUSPICIOUS or the record carries a rule reason (the rationale must cite the regulatory basis, or why the rule does not make the payment suspicious); acceptable otherwise.",
+    "screen_party: required where a party name carries a public-office title or names a coin-mixing service and no sanctions reason fired (N-05, N-06, N-12); acceptable everywhere else, since screening both parties is routine.",
+    "country_risk: acceptable on every case, required on none. The record already states list membership, and the tool knows only the configured lists.",
+    "explain_rule: acceptable where the record carries a rule reason or note; unnecessary otherwise.",
+    "party_history: the development, held-out and no-rule cases have no ledger, so it is never required there; acceptable where the suspicion or the ambiguity concerns how an account behaves (structuring, layering, pass-through and over-threshold categories, PI-01, PI-02, N-01, N-07, N-08, N-09, N-11, N-13, N-14, N-15, N-17, N-18), unnecessary elsewhere. Ledger-backed cases: required on every case, on the beneficiary for fan-in and on the originator otherwise (required_role; reported separately, not part of tool precision or recall)."
+  ],
+  "labels": {
+    "OC-01": {
+      "required": [],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "search_guidance"
+      ]
+    },
+    "OC-02": {
+      "required": [],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "search_guidance"
+      ]
+    },
+    "OC-03": {
+      "required": [],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "search_guidance"
+      ]
+    },
+    "OC-04": {
+      "required": [],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "search_guidance"
+      ]
+    },
+    "OC-05": {
+      "required": [],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "search_guidance"
+      ]
+    },
+    "OC-06": {
+      "required": [],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "search_guidance"
+      ]
+    },
+    "OC-07": {
+      "required": [],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "search_guidance"
+      ]
+    },
+    "OT-01": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule",
+        "party_history"
+      ]
+    },
+    "OT-02": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule",
+        "party_history"
+      ]
+    },
+    "OT-03": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule",
+        "party_history"
+      ]
+    },
+    "OT-04": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule",
+        "party_history"
+      ]
+    },
+    "OT-05": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule",
+        "party_history"
+      ]
+    },
+    "OT-06": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule",
+        "party_history"
+      ]
+    },
+    "ST-01": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule",
+        "party_history"
+      ]
+    },
+    "ST-02": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule",
+        "party_history"
+      ]
+    },
+    "ST-03": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule",
+        "party_history"
+      ]
+    },
+    "ST-04": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule",
+        "party_history"
+      ]
+    },
+    "HR-01": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule"
+      ]
+    },
+    "HR-02": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule"
+      ]
+    },
+    "HR-03": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule"
+      ]
+    },
+    "HR-04": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule"
+      ]
+    },
+    "LS-01": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule",
+        "party_history"
+      ]
+    },
+    "LS-02": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule",
+        "party_history"
+      ]
+    },
+    "LS-03": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule",
+        "party_history"
+      ]
+    },
+    "PT-01": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "party_history"
+      ]
+    },
+    "PT-02": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "party_history"
+      ]
+    },
+    "PT-03": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "party_history"
+      ]
+    },
+    "PI-01": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule",
+        "party_history"
+      ]
+    },
+    "PI-02": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule",
+        "party_history"
+      ]
+    },
+    "PI-03": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule"
+      ]
+    },
+    "PI-04": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule"
+      ]
+    },
+    "H-01": {
+      "required": [],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "search_guidance"
+      ]
+    },
+    "H-02": {
+      "required": [],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "search_guidance"
+      ]
+    },
+    "H-03": {
+      "required": [],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "search_guidance"
+      ]
+    },
+    "H-04": {
+      "required": [],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "search_guidance"
+      ]
+    },
+    "H-05": {
+      "required": [],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "search_guidance"
+      ]
+    },
+    "H-06": {
+      "required": [],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "search_guidance"
+      ]
+    },
+    "H-07": {
+      "required": [],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "search_guidance"
+      ]
+    },
+    "H-08": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule",
+        "party_history"
+      ]
+    },
+    "H-09": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule",
+        "party_history"
+      ]
+    },
+    "H-10": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule",
+        "party_history"
+      ]
+    },
+    "H-11": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule",
+        "party_history"
+      ]
+    },
+    "H-12": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule",
+        "party_history"
+      ]
+    },
+    "H-13": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule",
+        "party_history"
+      ]
+    },
+    "H-14": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule"
+      ]
+    },
+    "H-15": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule"
+      ]
+    },
+    "H-16": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule"
+      ]
+    },
+    "H-17": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule"
+      ]
+    },
+    "H-18": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule"
+      ]
+    },
+    "H-19": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule"
+      ]
+    },
+    "H-20": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule",
+        "party_history"
+      ]
+    },
+    "H-21": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule",
+        "party_history"
+      ]
+    },
+    "N-01": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "party_history"
+      ]
+    },
+    "N-02": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "party_history"
+      ]
+    },
+    "N-03": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk"
+      ]
+    },
+    "N-04": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk"
+      ]
+    },
+    "N-05": {
+      "required": [
+        "screen_party",
+        "search_guidance"
+      ],
+      "acceptable": [
+        "country_risk"
+      ]
+    },
+    "N-06": {
+      "required": [
+        "screen_party",
+        "search_guidance"
+      ],
+      "acceptable": [
+        "country_risk"
+      ]
+    },
+    "N-07": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "party_history"
+      ]
+    },
+    "N-08": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "party_history"
+      ]
+    },
+    "N-09": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "party_history"
+      ]
+    },
+    "N-10": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "party_history"
+      ]
+    },
+    "N-11": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "party_history"
+      ]
+    },
+    "N-12": {
+      "required": [
+        "screen_party",
+        "search_guidance"
+      ],
+      "acceptable": [
+        "country_risk",
+        "party_history"
+      ]
+    },
+    "N-13": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule",
+        "party_history"
+      ]
+    },
+    "N-14": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule",
+        "party_history"
+      ]
+    },
+    "N-15": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule",
+        "party_history"
+      ]
+    },
+    "N-16": {
+      "required": [],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "search_guidance"
+      ]
+    },
+    "N-17": {
+      "required": [
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule",
+        "party_history"
+      ]
+    },
+    "N-18": {
+      "required": [],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "party_history",
+        "search_guidance"
+      ]
+    },
+    "N-19": {
+      "required": [],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "search_guidance"
+      ]
+    },
+    "N-20": {
+      "required": [],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "search_guidance"
+      ]
+    },
+    "L-01": {
+      "required": [
+        "party_history",
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk"
+      ],
+      "required_role": {
+        "party_history": "originator"
+      }
+    },
+    "L-02": {
+      "required": [
+        "party_history",
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk"
+      ],
+      "required_role": {
+        "party_history": "originator"
+      }
+    },
+    "L-03": {
+      "required": [
+        "party_history",
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk"
+      ],
+      "required_role": {
+        "party_history": "originator"
+      }
+    },
+    "L-04": {
+      "required": [
+        "party_history",
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk"
+      ],
+      "required_role": {
+        "party_history": "originator"
+      }
+    },
+    "L-05": {
+      "required": [
+        "party_history",
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk"
+      ],
+      "required_role": {
+        "party_history": "beneficiary"
+      }
+    },
+    "L-06": {
+      "required": [
+        "party_history",
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk"
+      ],
+      "required_role": {
+        "party_history": "beneficiary"
+      }
+    },
+    "L-07": {
+      "required": [
+        "party_history",
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk"
+      ],
+      "required_role": {
+        "party_history": "beneficiary"
+      }
+    },
+    "L-08": {
+      "required": [
+        "party_history",
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule"
+      ],
+      "required_role": {
+        "party_history": "originator"
+      }
+    },
+    "L-09": {
+      "required": [
+        "party_history",
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule"
+      ],
+      "required_role": {
+        "party_history": "originator"
+      }
+    },
+    "L-10": {
+      "required": [
+        "party_history",
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule"
+      ],
+      "required_role": {
+        "party_history": "originator"
+      }
+    },
+    "L-11": {
+      "required": [
+        "party_history",
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk"
+      ],
+      "required_role": {
+        "party_history": "originator"
+      }
+    },
+    "L-12": {
+      "required": [
+        "party_history",
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk"
+      ],
+      "required_role": {
+        "party_history": "originator"
+      }
+    },
+    "L-13": {
+      "required": [
+        "party_history",
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule"
+      ],
+      "required_role": {
+        "party_history": "originator"
+      }
+    },
+    "L-14": {
+      "required": [
+        "party_history",
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule"
+      ],
+      "required_role": {
+        "party_history": "originator"
+      }
+    },
+    "L-15": {
+      "required": [
+        "party_history",
+        "search_guidance"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "explain_rule"
+      ],
+      "required_role": {
+        "party_history": "originator"
+      }
+    },
+    "L-16": {
+      "required": [
+        "party_history"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "search_guidance"
+      ],
+      "required_role": {
+        "party_history": "originator"
+      }
+    },
+    "L-17": {
+      "required": [
+        "party_history"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "search_guidance"
+      ],
+      "required_role": {
+        "party_history": "originator"
+      }
+    },
+    "L-18": {
+      "required": [
+        "party_history"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "search_guidance"
+      ],
+      "required_role": {
+        "party_history": "originator"
+      }
+    },
+    "L-19": {
+      "required": [
+        "party_history"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "search_guidance"
+      ],
+      "required_role": {
+        "party_history": "originator"
+      }
+    },
+    "L-20": {
+      "required": [
+        "party_history"
+      ],
+      "acceptable": [
+        "screen_party",
+        "country_risk",
+        "search_guidance"
+      ],
+      "required_role": {
+        "party_history": "originator"
+      }
+    }
+  }
+}

@@ -6,6 +6,9 @@
 !tests/fixtures/llm_cases_norule.json
 # Relevance labels for scripts/eval_retrieval.py (fragment ids and pages only).
 !tests/fixtures/retrieval_cases.json
+# Tool labels and ledger-backed cases for the investigation agent evaluation.
+!tests/fixtures/agent_tool_labels.json
+!tests/fixtures/agent_ledger_cases.json
 !package.json
 gcp-key*.json
 .aws/
@@ -30,3 +33,4 @@ docs/INTERVIEW_PREP.md
 # Evaluation outputs (reports, per-case JSONL); never commit them
 data/*.jsonl
 data/*.md
+data/agent_eval/

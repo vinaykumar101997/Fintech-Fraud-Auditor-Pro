@@ -60,10 +60,9 @@ class ComplianceIntelligenceProvider:
                 embedding=self.embeddings,
                 vector_name="text-dense",
             )
-            self.engine = build_analysis_chain(
-                self.llm,
-                self.vector_store.as_retriever(search_kwargs={"k": config.RETRIEVER_K}),
-            )
+            # Shared by the fixed review's chain and the agent's guidance search.
+            self.retriever = self.vector_store.as_retriever(search_kwargs={"k": config.RETRIEVER_K})
+            self.engine = build_analysis_chain(self.llm, self.retriever)
         except ProviderConfigError as exc:
             logger.error("Model provider misconfigured: %s", exc)
             raise ProviderUnavailable(str(exc)) from exc

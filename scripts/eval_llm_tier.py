@@ -34,12 +34,37 @@ Each case is passed to the engine with exactly the arguments the app passes:
 the transaction fields and the rule reasons. The behaviour-model flags in the
 case file describe why such a row would be forwarded, but the engine has no
 parameter for them, so the review does not see them.
+
+--engine picks the review:
+
+    fixed           the fixed review (default), as above
+    agent           the investigation agent (utils/investigation.py, REVIEW_MODE=agent)
+    fixed+history   the fixed review with both parties' account history (the
+                    summary the agent's party_history tool returns) added to
+                    the record; needs a case file with a ledger
+
+A case file with a "ledger" entry (tests/fixtures/agent_ledger_cases.json)
+names a generate_sample_ledger.generate() call; the generated batch is the
+ledger the history reads. Other case files have no ledger, and the agent's
+party_history tool says so.
+
+    python scripts/eval_llm_tier.py --engine agent
+    python scripts/eval_llm_tier.py --engine agent --live --pause 4 --resume \
+        --cases-out data/agent_dev_run1.jsonl --out data/agent_dev_run1.md
+
+--pause waits after every live model call. --resume skips the cases already
+in --cases-out and scores the whole file. For the agent the report adds tool
+selection against tests/fixtures/agent_tool_labels.json (--tool-labels) and
+per-case calls, tokens, cost and time; scripts/compare_llm_runs.py counts the
+discordant cases between two runs.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import math
 import os
 import sys
 import time
@@ -54,10 +79,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import config  # noqa: E402
 from evaluate import wilson_interval  # noqa: E402
+from utils.trace import billed_tokens  # noqa: E402
 from utils.verdicts import AuditOutcome, Verdict  # noqa: E402
 
 CASES_PATH = config.PROJECT_ROOT / "tests" / "fixtures" / "llm_cases.json"
 HELDOUT_CASES_PATH = config.PROJECT_ROOT / "tests" / "fixtures" / "llm_cases_heldout.json"
+LEDGER_CASES_PATH = config.PROJECT_ROOT / "tests" / "fixtures" / "agent_ledger_cases.json"
+TOOL_LABELS_PATH = config.PROJECT_ROOT / "tests" / "fixtures" / "agent_tool_labels.json"
+GUIDANCE_CACHE_DIR = config.PROJECT_ROOT / "eval" / "cache" / "guidance"
 PASS_THROUGH_NOTE = (
     "Note: pass_through cases cannot be answered by the review. Their signal is in the "
     "behaviour flags, and the review does not receive behaviour flags, only the transaction "
@@ -67,6 +96,12 @@ CATEGORIES = (
     "obvious_clear", "over_threshold_legitimate", "structuring", "high_risk_jurisdiction",
     "layering_shell", "pass_through", "prompt_injection",
 )
+# Categories of the ledger-backed cases (pass_through is shared).
+LEDGER_CATEGORIES = (
+    "pass_through", "fan_in", "structuring_history", "circular", "clean_large", "clean_ordinary",
+)
+ALL_CATEGORIES = CATEGORIES + tuple(c for c in LEDGER_CATEGORIES if c not in CATEGORIES)
+ENGINES = ("fixed", "agent", "fixed+history")
 EXPECTED = (Verdict.SUSPICIOUS.value, Verdict.CLEAR.value)
 FAKE_MODES = ("oracle", "always-clear", "always-suspicious", "error")
 DEFAULT_LIVE_MAX_CALLS = 40
@@ -91,7 +126,7 @@ def load_cases(path: Path = CASES_PATH) -> List[Dict[str, Any]]:
         if not cid or cid in seen:
             raise ValueError(f"Missing or duplicate case id: {cid!r}")
         seen.add(cid)
-        if case.get("category") not in CATEGORIES:
+        if case.get("category") not in ALL_CATEGORIES:
             raise ValueError(f"{cid}: unknown category {case.get('category')!r}")
         if case.get("expected_verdict") not in EXPECTED:
             raise ValueError(f"{cid}: expected_verdict must be one of {EXPECTED}")
@@ -104,6 +139,35 @@ def load_cases(path: Path = CASES_PATH) -> List[Dict[str, Any]]:
             if not isinstance(case.get(key), list):
                 raise ValueError(f"{cid}: {key} must be a list")
     return cases
+
+
+def ledger_spec(path: Path) -> Optional[Dict[str, Any]]:
+    """The case file's "ledger" entry, or None for a case file without a ledger."""
+    return json.loads(Path(path).read_text(encoding="utf-8")).get("ledger")
+
+
+def build_case_ledger(spec: Dict[str, Any]):
+    """The generated batch a ledger-backed case file names, as the app loads a ledger.
+
+    Generated on the fly from the seed, so no ledger data is stored with the
+    cases. Amounts become Decimals with a float mirror and timestamps
+    datetimes, as utils.data_loader.load_ledger leaves them.
+    """
+    import pandas as pd
+    from generate_sample_ledger import generate
+    from utils.data_loader import parse_money
+
+    ledger = generate(seed=int(spec["seed"]), hard=bool(spec.get("hard", False)))
+    ledger = ledger.drop(columns=[c for c in ("is_laundering", "pattern") if c in ledger.columns])
+    ledger["amount"] = [parse_money(a) for a in ledger["amount"]]
+    ledger["amount_float"] = [float(abs(a)) for a in ledger["amount"]]
+    ledger["transaction_id"] = ledger["transaction_id"].astype(str)
+    ledger["timestamp"] = pd.to_datetime(ledger["timestamp"], errors="coerce")
+    return ledger
+
+
+def load_tool_labels(path: Path = TOOL_LABELS_PATH) -> Dict[str, Dict[str, Any]]:
+    return json.loads(Path(path).read_text(encoding="utf-8"))["labels"]
 
 
 # --------------------------------------------------------------------------
@@ -175,6 +239,40 @@ class FakeLLM:
             })
         return RunnableLambda(respond)
 
+    # The investigation agent: one round of lookups, then notes.
+    FAKE_LOOKUPS = (
+        ("search_guidance", {"topics": ["general_monitoring"]}),
+        ("party_history", {"role": "originator"}),
+    )
+
+    def bind_tools(self, tools):
+        from langchain_core.messages import AIMessage, ToolMessage
+        from langchain_core.runnables import RunnableLambda
+
+        def respond(messages):
+            self.call()
+            usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+            if not any(isinstance(m, ToolMessage) for m in messages):
+                return AIMessage(content="", usage_metadata=usage, tool_calls=[
+                    {"name": name, "args": args, "id": f"call-{n}", "type": "tool_call"}
+                    for n, (name, args) in enumerate(self.FAKE_LOOKUPS)])
+            return AIMessage(content=f"Fake {self.mode} investigation notes.", usage_metadata=usage)
+        return RunnableLambda(respond)
+
+
+class FakeRetriever:
+    """Stands in for the guidance index the agent searches: fixed passages, no model call."""
+
+    def __init__(self, passages: int = 5):
+        self.passages = passages
+
+    def invoke(self, query, config=None):
+        from langchain_core.documents import Document
+
+        return [Document(page_content=f"Fake regulatory passage {i + 1}.",
+                         metadata={"source": f"fake-passage-{i + 1}", "page": i})
+                for i in range(self.passages)]
+
 
 class FakeRetrievalQA:
     """Stands in for the retrieval chain: fixed passages, one model call."""
@@ -234,13 +332,57 @@ class PassageRecorder:
         return result
 
 
+class RetrieverRecorder:
+    """Wraps the agent's retriever and keeps every passage returned for the current case.
+
+    With cache_dir it also keeps the passages per query text on disk, so a
+    rerun or a second run makes no embedding call for a query already
+    searched. Retrieval is deterministic for a given query and index, so a
+    cached answer is the same answer.
+    """
+
+    def __init__(self, retriever, cache_dir: Optional[Path] = None, index_key: str = ""):
+        self.retriever = retriever
+        self.cache_dir = Path(cache_dir) if cache_dir else None
+        self.index_key = index_key
+        self.documents: List[Any] = []
+        self.hits = self.misses = 0
+
+    def reset(self) -> None:
+        self.documents = []
+
+    def invoke(self, query: str, config=None):
+        from langchain_core.documents import Document
+
+        path = None
+        if self.cache_dir is not None:
+            key = hashlib.sha256(f"{self.index_key}\n{query}".encode("utf-8")).hexdigest()
+            path = self.cache_dir / f"{key}.json"
+            if path.exists():
+                self.hits += 1
+                docs = [Document(page_content=d["page_content"], metadata=d["metadata"])
+                        for d in json.loads(path.read_text(encoding="utf-8"))]
+                self.documents.extend(docs)
+                return docs
+        self.misses += 1
+        docs = list(self.retriever.invoke(query))
+        if path is not None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(
+                [{"page_content": d.page_content, "metadata": dict(d.metadata or {})} for d in docs],
+                ensure_ascii=False, default=str), encoding="utf-8")
+        self.documents.extend(docs)
+        return docs
+
+
 # --------------------------------------------------------------------------
 # Live provider
 # --------------------------------------------------------------------------
-def usage_meter(budget: CallBudget):
+def usage_meter(budget: CallBudget, pause: float = 0.0, sleep=time.sleep):
     """LangChain callback that spends the budget on every model call and
     collects token usage. raise_error makes a refused call fail before any
-    request is sent."""
+    request is sent. `pause` seconds are waited after every model call, to
+    stay under a per-minute quota."""
     from langchain_core.callbacks import BaseCallbackHandler
 
     class UsageMeter(BaseCallbackHandler):
@@ -259,28 +401,49 @@ def usage_meter(budget: CallBudget):
         def on_llm_end(self, response, **kwargs):
             for generations in response.generations:
                 for gen in generations:
-                    usage = getattr(getattr(gen, "message", None), "usage_metadata", None) or {}
-                    self.input_tokens += usage.get("input_tokens", 0)
-                    self.output_tokens += usage.get("output_tokens", 0)
+                    # Reasoning tokens are billed as output (utils.trace.billed_tokens).
+                    tokens_in, tokens_out = billed_tokens(
+                        getattr(getattr(gen, "message", None), "usage_metadata", None))
+                    self.input_tokens += tokens_in
+                    self.output_tokens += tokens_out
+            if pause > 0:
+                sleep(pause)
 
     return UsageMeter()
 
 
-def build_live(budget: CallBudget):
-    """Engine and retrieval chain from the app's own factory, metered."""
+def build_live(budget: CallBudget, engine_kind: str = "fixed", pause: float = 0.0,
+               cache_dir: Optional[Path] = GUIDANCE_CACHE_DIR):
+    """Engine and retrieval from the app's own factory, metered.
+
+    Returns (engine, rag_engine, meter, retriever): the fixed review uses the
+    retrieval chain, the agent the retriever (with an on-disk cache).
+    """
     from utils.agents import ComplianceAuditEngine
     from utils.chat_agent import ComplianceIntelligenceProvider
 
     provider = ComplianceIntelligenceProvider()
-    meter = usage_meter(budget)
+    meter = usage_meter(budget, pause=pause)
     provider.llm.callbacks = [meter]  # before the engine binds the model
-    return ComplianceAuditEngine(llm=provider.llm), provider.engine, meter
+    if engine_kind == "agent":
+        from utils.investigation import InvestigationEngine
+
+        key = f"{config.MODEL_PROVIDER}|{config.QDRANT_COLLECTION}|{config.RETRIEVER_K}"
+        retriever = RetrieverRecorder(provider.retriever, cache_dir, key)
+        return InvestigationEngine(llm=provider.llm), None, meter, retriever
+    return ComplianceAuditEngine(llm=provider.llm), provider.engine, meter, None
 
 
-def build_fake(mode: str, budget: CallBudget):
+def build_fake(mode: str, budget: CallBudget, engine_kind: str = "fixed"):
+    """(engine, rag_engine, fake). For the agent the second item is a fake
+    retriever for its guidance search instead of a retrieval chain."""
     from utils.agents import ComplianceAuditEngine
 
     llm = FakeLLM(mode, budget)
+    if engine_kind == "agent":
+        from utils.investigation import InvestigationEngine
+
+        return InvestigationEngine(llm=llm), RetrieverRecorder(FakeRetriever()), llm
     return ComplianceAuditEngine(llm=llm), FakeRetrievalQA(llm), llm
 
 
@@ -306,9 +469,26 @@ class Run:
 
 
 def case_row(case, outcome: AuditOutcome, passages: List[Any], calls: int,
-             tokens, seconds: float) -> Dict[str, Any]:
-    """One --cases-out record. Rule reasons are the list passed to the engine."""
+             tokens, seconds: float, engine_kind: str = "fixed") -> Dict[str, Any]:
+    """One --cases-out record. Rule reasons are the list passed to the engine.
+
+    Agent and fixed+history rows also name the engine; agent rows add the
+    tools called, with their arguments, and why the investigation stopped.
+    """
     errored = outcome.verdict is Verdict.ERROR or outcome.error_detail is not None
+    extra: Dict[str, Any] = {}
+    if engine_kind != "fixed":
+        extra["engine"] = engine_kind
+    trace = getattr(outcome, "trace", None)
+    if trace is not None:
+        extra.update({
+            "tools_called": trace.tools_called,
+            "tool_calls": [{"name": s.name, "args": s.args, "error": s.error}
+                           for s in trace.steps if s.kind == "tool"],
+            "investigation_calls": trace.investigation_calls,
+            "stop_reason": trace.stop_reason,
+            "notes": outcome.initial_finding or None,
+        })
     return {
         "id": case["id"],
         "category": case["category"],
@@ -324,6 +504,7 @@ def case_row(case, outcome: AuditOutcome, passages: List[Any], calls: int,
         "input_tokens": tokens[0] if tokens else None,
         "output_tokens": tokens[1] if tokens else None,
         "seconds": round(seconds, 3),
+        **extra,
     }
 
 
@@ -332,14 +513,18 @@ def _is_cap_failure(outcome: AuditOutcome) -> bool:
 
 
 def run_cases(cases, engine, rag_engine, budget: CallBudget, fake: Optional[FakeLLM] = None,
-              meter=None, cases_out: Optional[TextIO] = None, progress: bool = False) -> Run:
+              meter=None, cases_out: Optional[TextIO] = None, progress: bool = False,
+              engine_kind: str = "fixed", ledger=None, retriever=None) -> Run:
     """Assess each case in order; stop cleanly when the call budget runs out.
 
     With cases_out, each finished case is written as one JSON line and
-    flushed before the next case starts.
+    flushed before the next case starts. `engine_kind` "agent" passes the
+    ledger and the retriever to the investigation; "fixed+history" adds both
+    parties' history from the ledger to the record.
     """
     run = Run(total_cases=len(cases))
-    recorder = PassageRecorder(rag_engine) if rag_engine is not None else None
+    agent = engine_kind == "agent"
+    recorder = PassageRecorder(rag_engine) if rag_engine is not None and not agent else None
     for case in cases:
         if budget.exhausted:
             run.stopped_at_cap = True
@@ -350,7 +535,11 @@ def run_cases(cases, engine, rag_engine, budget: CallBudget, fake: Optional[Fake
         tokens_before = (meter.input_tokens, meter.output_tokens) if meter is not None else None
         started = time.perf_counter()
         txn = case["transaction"]
-        outcome = engine.assess_transaction(
+        # The record always shows the case id. A ledger-backed case is looked up
+        # in the ledger under the row id it names, which never reaches the model:
+        # the generator's ids differ by pattern and would give the label away.
+        row_id = case.get("ledger_transaction_id") or case["id"]
+        kwargs: Dict[str, Any] = dict(
             transaction_id=case["id"],
             amount=abs(Decimal(txn["amount"])),
             country=txn["country"],
@@ -359,6 +548,18 @@ def run_cases(cases, engine, rag_engine, budget: CallBudget, fake: Optional[Fake
             rule_reasons=case["rule_reasons"],
             rag_engine=recorder,
         )
+        if agent:
+            if retriever is not None and hasattr(retriever, "reset"):
+                retriever.reset()
+            kwargs.update(ledger=ledger, retriever=retriever, ledger_row_id=row_id)
+        elif engine_kind == "fixed+history":
+            from utils.agent_tools import CaseContext, history_signals
+
+            ctx = CaseContext(transaction_id=row_id, amount=kwargs["amount"], country=txn["country"],
+                              sender=txn["sender"], receiver=txn["receiver"],
+                              rule_reasons=case["rule_reasons"], ledger=ledger)
+            kwargs["behaviour_signals"] = history_signals(ctx)
+        outcome = engine.assess_transaction(**kwargs)
         seconds = time.perf_counter() - started
         if _is_cap_failure(outcome):
             # Cut off by the cap, not a verdict: dropped from the results.
@@ -376,8 +577,12 @@ def run_cases(cases, engine, rag_engine, budget: CallBudget, fake: Optional[Fake
             if tokens_before is not None:
                 spent = (meter.input_tokens - tokens_before[0], meter.output_tokens - tokens_before[1])
                 tokens = spent if any(spent) else None  # provider reported no usage
-            row = case_row(case, outcome, recorder.documents if recorder else [],
-                           budget.used - calls_before, tokens, seconds)
+            if agent:
+                passages = list(getattr(retriever, "documents", []) or [])
+            else:
+                passages = recorder.documents if recorder else []
+            row = case_row(case, outcome, passages, budget.used - calls_before, tokens, seconds,
+                           engine_kind=engine_kind)
             cases_out.write(json.dumps(row, ensure_ascii=False) + "\n")
             cases_out.flush()
         if progress:
@@ -418,7 +623,7 @@ def score(results: List[CaseResult]) -> Dict[str, Any]:
         "precision": (tp, predicted_sus, wilson_interval(tp, predicted_sus)),
         "recall": (tp, actual_sus, wilson_interval(tp, actual_sus)),
         "confusion": {exp: dict(confusion[exp]) for exp in EXPECTED},
-        "per_category": {c: tuple(per_category[c]) for c in CATEGORIES if c in per_category},
+        "per_category": {c: tuple(per_category[c]) for c in ALL_CATEGORIES if c in per_category},
         "errored": (errored, n),
         "errored_as_clear": errored_as_clear,
     }
@@ -485,9 +690,134 @@ def cost_line(meter, model: str, price_in=None, price_out=None) -> str:
     return usage + f" Estimated cost: ${cost:.4f} at ${prices[0]}/${prices[1]} per million tokens."
 
 
+# --------------------------------------------------------------------------
+# Rows on file, tool selection, usage
+# --------------------------------------------------------------------------
+def read_rows(path: Path) -> List[Dict[str, Any]]:
+    """Every row of a --cases-out file (one JSON object per line)."""
+    if not Path(path).exists():
+        return []
+    return [json.loads(line) for line in Path(path).read_text(encoding="utf-8").splitlines()
+            if line.strip()]
+
+
+def results_from_rows(rows: List[Dict[str, Any]]) -> List[CaseResult]:
+    """CaseResults from --cases-out rows. An errored row was recorded as ERROR."""
+    return [CaseResult(case_id=r["id"], category=r["category"], expected=r["expected"],
+                       verdict=r["returned"], errored=r["returned"] == Verdict.ERROR.value,
+                       error_detail=r.get("error_detail")) for r in rows]
+
+
+def tool_selection(rows: List[Dict[str, Any]], labels: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    """Tool choice against the pre-registered labels, pooled over cases.
+
+    recall: required tools called / required tools, over cases with a
+    required tool. precision: distinct tools called that are required or
+    acceptable / distinct tools called, over cases with at least one call.
+    Errored rows are included: a lookup made before an investigation stopped
+    was still made. required_role counts whether party_history was called for
+    the labelled party.
+    """
+    recall_k = recall_n = prec_k = prec_n = no_calls = role_k = role_n = 0
+    unnecessary: Counter = Counter()
+    missed: Counter = Counter()
+    for row in rows:
+        label = labels.get(row["id"])
+        if label is None or "tools_called" not in row:
+            continue
+        called = set(row["tools_called"])
+        required, allowed = set(label["required"]), set(label["required"]) | set(label["acceptable"])
+        recall_n += len(required)
+        recall_k += len(required & called)
+        missed.update(required - called)
+        if called:
+            prec_n += len(called)
+            prec_k += len(called & allowed)
+            unnecessary.update(called - allowed)
+        else:
+            no_calls += 1
+        for tool, role in (label.get("required_role") or {}).items():
+            role_n += 1
+            role_k += any(c["name"] == tool and (c.get("args") or {}).get("role") == role
+                          for c in row.get("tool_calls") or [])
+    return {"recall": (recall_k, recall_n), "precision": (prec_k, prec_n), "no_calls": no_calls,
+            "required_role": (role_k, role_n), "unnecessary": dict(unnecessary),
+            "missed": dict(missed)}
+
+
+def _p95(values: List[float]) -> float:
+    ordered = sorted(values)
+    return ordered[max(math.ceil(0.95 * len(ordered)) - 1, 0)] if ordered else 0.0
+
+
+def usage_summary(rows: List[Dict[str, Any]], prices=None) -> Dict[str, Any]:
+    """Per-case means of calls, tokens and cost, and mean and 95th-percentile seconds."""
+    n = len(rows)
+    if n == 0:
+        return {"n": 0}
+    tokens_in = [r.get("input_tokens") or 0 for r in rows]
+    tokens_out = [r.get("output_tokens") or 0 for r in rows]
+    seconds = [r.get("seconds") or 0.0 for r in rows]
+    summary = {
+        "n": n,
+        "model_calls": sum(r.get("model_calls") or 0 for r in rows) / n,
+        "tool_calls": sum(len(r.get("tool_calls") or []) for r in rows) / n,
+        "input_tokens": sum(tokens_in) / n,
+        "output_tokens": sum(tokens_out) / n,
+        "seconds_mean": sum(seconds) / n,
+        "seconds_p95": _p95(seconds),
+        "cost_total": None,
+    }
+    if prices is not None:
+        total = (sum(tokens_in) * prices[0] + sum(tokens_out) * prices[1]) / 1e6
+        summary["cost_total"] = total
+        summary["cost_per_case"] = total / n
+    return summary
+
+
+def usage_lines(summary: Dict[str, Any]) -> List[str]:
+    if not summary.get("n"):
+        return []
+    lines = ["", "| Per case | Value |", "|---|---|",
+             f"| Model calls (mean) | {summary['model_calls']:.2f} |",
+             f"| Tool calls (mean) | {summary['tool_calls']:.2f} |",
+             f"| Input tokens (mean) | {summary['input_tokens']:,.0f} |",
+             f"| Output tokens (mean) | {summary['output_tokens']:,.0f} |",
+             f"| Seconds (mean / 95th percentile) | {summary['seconds_mean']:.1f} / "
+             f"{summary['seconds_p95']:.1f} |"]
+    if summary.get("cost_total") is not None:
+        lines.append(f"| Estimated cost (per case / run) | ${summary['cost_per_case']:.4f} / "
+                     f"${summary['cost_total']:.4f} |")
+    return lines
+
+
+def tool_lines(selection: Dict[str, Any]) -> List[str]:
+    lines = ["", "| Tool selection | Value |", "|---|---|",
+             f"| Recall (required tools called) | {_ratio(*selection['recall'])} |",
+             f"| Precision (calls required or acceptable) | {_ratio(*selection['precision'])} |",
+             f"| Cases with no tool call | {selection['no_calls']} |"]
+    if selection["required_role"][1]:
+        lines.append(f"| party_history on the labelled party | {_ratio(*selection['required_role'])} |")
+    if selection["missed"]:
+        lines.append("| Required but not called | "
+                     + ", ".join(f"{k} {v}" for k, v in sorted(selection["missed"].items())) + " |")
+    if selection["unnecessary"]:
+        lines.append("| Unnecessary calls | "
+                     + ", ".join(f"{k} {v}" for k, v in sorted(selection["unnecessary"].items())) + " |")
+    return lines
+
+
+def _prices(model: str, price_in=None, price_out=None):
+    if price_in is not None and price_out is not None:
+        return (price_in, price_out)
+    return PRICES_PER_MILLION.get(model)
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--cases", type=Path, default=CASES_PATH)
+    parser.add_argument("--engine", choices=ENGINES, default="fixed",
+                        help="the review to run (default: fixed)")
     parser.add_argument("--fake", choices=FAKE_MODES, default="oracle",
                         help="fake model behaviour (ignored with --live)")
     parser.add_argument("--live", action="store_true",
@@ -498,30 +828,52 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--out", type=Path, default=None, help="also write the report as markdown")
     parser.add_argument("--cases-out", type=Path, default=None,
                         help="append one JSON row per finished case to this JSONL file")
+    parser.add_argument("--resume", action="store_true",
+                        help="skip cases already in --cases-out and score the whole file")
+    parser.add_argument("--pause", type=float, default=0.0,
+                        help="seconds to wait after every live model call")
+    parser.add_argument("--tool-labels", type=Path, default=TOOL_LABELS_PATH,
+                        help="tool labels for scoring the agent's tool selection")
     parser.add_argument("--price-in", type=float, default=None, help="USD per million input tokens")
     parser.add_argument("--price-out", type=float, default=None, help="USD per million output tokens")
-    parser.add_argument("--exclude-category", action="append", default=[], choices=CATEGORIES,
+    parser.add_argument("--exclude-category", action="append", default=[], choices=ALL_CATEGORIES,
                         metavar="NAME", help="leave out every case in this category (repeatable)")
     args = parser.parse_args(argv)
 
     excluded = tuple(dict.fromkeys(args.exclude_category))
-    cases = [c for c in load_cases(args.cases) if c["category"] not in excluded]
-    if not cases:
+    all_cases = [c for c in load_cases(args.cases) if c["category"] not in excluded]
+    if not all_cases:
         parser.error("no cases left after --exclude-category")
+    if args.resume and not args.cases_out:
+        parser.error("--resume needs --cases-out")
+    spec = ledger_spec(args.cases)
+    if args.engine == "fixed+history" and spec is None:
+        parser.error("--engine fixed+history needs a case file with a ledger")
+    ledger = build_case_ledger(spec) if spec is not None else None
+
+    done = set()
+    if args.resume:
+        done = {r["id"] for r in read_rows(args.cases_out)}
+    cases = [c for c in all_cases if c["id"] not in done]
+
     cap = args.max_calls
     if args.live and cap is None:
         cap = DEFAULT_LIVE_MAX_CALLS
     budget = CallBudget(cap)
 
-    meter = fake = None
+    meter = fake = retriever = None
     if args.live:
-        engine, rag_engine, meter = build_live(budget)
+        engine, rag_engine, meter, retriever = build_live(budget, args.engine, pause=args.pause)
         label = f"live, {config.MODEL_PROVIDER} {config.chat_model_name()}"
     else:
         # Fake failures need no backoff; this keeps the error mode instant.
         config.LLM_RETRY_BASE_DELAY = 0.0
-        engine, rag_engine, fake = build_fake(args.fake, budget)
+        engine, rag_engine, fake = build_fake(args.fake, budget, args.engine)
         label = f"fake model, {args.fake}"
+        if args.engine == "agent":
+            rag_engine, retriever = None, rag_engine
+    if args.engine != "fixed":
+        label += f", engine {args.engine}"
 
     cases_out = None
     if args.cases_out:
@@ -529,16 +881,35 @@ def main(argv: Optional[List[str]] = None) -> int:
         cases_out = args.cases_out.open("a", encoding="utf-8")
     try:
         run = run_cases(cases, engine, rag_engine, budget, fake=fake, meter=meter,
-                        cases_out=cases_out, progress=True)
+                        cases_out=cases_out, progress=True, engine_kind=args.engine,
+                        ledger=ledger, retriever=retriever)
     finally:
         if cases_out is not None:
             cases_out.close()
     print()
+
+    wanted = {c["id"] for c in all_cases}
+    rows = [r for r in read_rows(args.cases_out) if r["id"] in wanted] if args.cases_out else []
+    if args.resume:
+        # Score every case on file, earlier invocations included.
+        results = results_from_rows(rows)
+        run = Run(results=results, total_cases=len(all_cases),
+                  calls=sum(r.get("model_calls") or 0 for r in rows),
+                  stopped_at_cap=run.stopped_at_cap)
     metrics = score(run.results)
     lines = report_lines(run, metrics, label, cases_file=args.cases, excluded=excluded)
-    if args.live:
+    if args.live and not args.resume:
         lines += ["", cost_line(meter, config.chat_model_name(), args.price_in, args.price_out)]
-    lines += ["", PASS_THROUGH_NOTE]
+    if rows:
+        prices = _prices(config.chat_model_name(), args.price_in, args.price_out) if args.live else None
+        lines += usage_lines(usage_summary(rows, prices))
+    if args.engine == "agent" and rows and Path(args.tool_labels).exists():
+        lines += tool_lines(tool_selection(rows, load_tool_labels(args.tool_labels)))
+    if retriever is not None and getattr(retriever, "cache_dir", None) is not None:
+        lines += ["", f"Guidance searches: {retriever.misses} sent to the index, "
+                      f"{retriever.hits} served from the cache."]
+    if spec is None:
+        lines += ["", PASS_THROUGH_NOTE]
 
     text = "\n".join(lines)
     print(text)
@@ -546,7 +917,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         args.out.write_text(text + "\n", encoding="utf-8")
         print(f"\nWrote {args.out}")
     if args.cases_out:
-        print(f"Appended {len(run.results)} case rows to {args.cases_out}")
+        print(f"Appended {len(cases) if not run.stopped_at_cap else 'some'} case rows to {args.cases_out}")
 
     if metrics["errored_as_clear"]:
         print(f"\nFAILED: errored reviews counted as CLEAR: {metrics['errored_as_clear']}")
