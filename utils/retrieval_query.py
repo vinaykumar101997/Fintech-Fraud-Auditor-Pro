@@ -123,9 +123,55 @@ def build_retrieval_query(
     the same text.
     """
     ids = rule_ids(rule_reasons or [])
-    matched = [TYPOLOGIES[rid] for rid in ids if rid in TYPOLOGIES]
-    typologies = tuple(label for label, _ in matched)
+    matched = [rid for rid in ids if rid in TYPOLOGIES]
+    facts = _facts(amount, country, sender, receiver, ids)
+    lead = None if matched else "AML/CFT requirements for monitoring a payment that no rule flagged: "
+    return RetrievalQuery(text=_compose(matched, lead, facts), rule_ids=tuple(ids),
+                          typologies=tuple(TYPOLOGIES[rid][0] for rid in matched), facts=facts)
 
+
+# Topic id for the general monitoring duties, next to the TYPOLOGIES keys.
+GENERAL_TOPIC = "general_monitoring"
+TOPIC_IDS = tuple(TYPOLOGIES) + (GENERAL_TOPIC,)
+
+
+def build_topic_query(
+    topics: Iterable[str],
+    *,
+    amount: object = None,
+    country: object = "",
+    sender: object = None,
+    receiver: object = None,
+    rule_reasons: Optional[Iterable[str]] = None,
+) -> RetrievalQuery:
+    """Query for chosen topics, with the same facts build_retrieval_query states.
+
+    `topics` are ids from TOPIC_IDS, chosen by the caller instead of read off
+    the rule hits. The facts still come from the transaction and its rule
+    hits, so a topic choice cannot add a fact that is not true (choosing
+    sanctions_name does not claim a sanctions match). Party names stay out of
+    the text, as above. An unknown topic id raises ValueError.
+    """
+    chosen = list(dict.fromkeys(topics or []))
+    unknown = [t for t in chosen if t not in TOPIC_IDS]
+    if unknown:
+        raise ValueError(f"Unknown topic id(s): {', '.join(map(str, unknown))}")
+    matched = [t for t in TYPOLOGIES if t in chosen]
+    ids = rule_ids(rule_reasons or [])
+    facts = _facts(amount, country, sender, receiver, ids)
+    if matched:
+        lead = None
+    elif any(rid in TYPOLOGIES for rid in ids):
+        lead = "AML/CFT requirements for monitoring a payment: "
+    else:
+        lead = "AML/CFT requirements for monitoring a payment that no rule flagged: "
+    text = _compose(matched, lead, facts, also_general=bool(matched) and GENERAL_TOPIC in chosen)
+    return RetrievalQuery(text=text, rule_ids=tuple(ids),
+                          typologies=tuple(TYPOLOGIES[t][0] for t in matched), facts=facts)
+
+
+def _facts(amount: object, country: object, sender: object, receiver: object,
+           ids: List[str]) -> Tuple[str, ...]:
     facts = [_amount_fact(amount), _jurisdiction_fact(country, ids)]
     if "sanctions_name" in ids:
         facts.append("a party name matches a sanctions list entry")
@@ -133,21 +179,25 @@ def build_retrieval_query(
         facts.append("originator not identified")
     if _is_placeholder(receiver):
         facts.append("beneficiary not identified")
-    facts = tuple(fact for fact in facts if fact)
+    return tuple(fact for fact in facts if fact)
 
-    if matched:
+
+def _compose(typology_ids: List[str], lead: Optional[str], facts: Tuple[str, ...],
+             also_general: bool = False) -> str:
+    """Query text: typologies and their topics, or the general duties after `lead`."""
+    if typology_ids:
+        topics = [TYPOLOGIES[t][1] for t in typology_ids] + ([GENERAL_TOPICS] if also_general else [])
         parts = [
             "AML/CFT requirements and risk indicators for a payment showing: "
-            + "; ".join(typologies) + ".",
-            "Topics: " + "; ".join(topics for _, topics in matched) + ".",
+            + "; ".join(TYPOLOGIES[t][0] for t in typology_ids) + ".",
+            "Topics: " + "; ".join(topics) + ".",
         ]
     else:
-        parts = ["AML/CFT requirements for monitoring a payment that no rule flagged: "
-                 + GENERAL_TOPICS + "."]
+        parts = [(lead or "") + GENERAL_TOPICS + "."]
     if facts:
         parts.append("Facts: " + "; ".join(facts) + ".")
 
     text = " ".join(parts)
     if len(text) > MAX_QUERY_CHARS:
         text = text[:MAX_QUERY_CHARS].rsplit(" ", 1)[0]
-    return RetrievalQuery(text=text, rule_ids=tuple(ids), typologies=typologies, facts=facts)
+    return text

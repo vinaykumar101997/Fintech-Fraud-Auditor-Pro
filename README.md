@@ -50,6 +50,21 @@ The AI review is evaluated on three synthetic case sets (31 development, 21 held
 
 These are small, author-written sets, so they show gross failures rather than precise rates. Known gaps: a solicitor's client-account payment is still flagged as suspicious, and the review does not see behaviour-model flags. Full method and results: [docs/EVALUATION.md](docs/EVALUATION.md).
 
+### Optional investigation agent
+
+`REVIEW_MODE=agent` replaces the review's single retrieval call with an investigation: the model chooses among five read-only lookups (sanctions screening of a party, country risk, a rule's definition, a party's account history in the loaded ledger, guidance search by topic), under hard limits on model calls, lookups and tokens, and the same structured review then gives the verdict. Any limit reached, or any lookup that fails, gives ERROR, never CLEAR. The default stays `fixed`.
+
+It was compared with the fixed review under rules written before any agent output, two runs per arm on Gemini 2.5 Flash:
+
+| | Fixed review | Agent |
+|---|---|---|
+| 72 cases without a ledger: suspicious flagged | 37/41, 39/41 | 30/41, 32/41 |
+| 72 cases: clean cleared | 28/31, 25/31 | 30/31, 30/31 |
+| 20 ledger-backed cases: suspicious flagged | 3/12, 3/12 (10/12, 10/12 with the history summary added) | 11/12, 12/12 |
+| Cost per case (72 cases) | $0.0108, $0.0161 | $0.0152, $0.0149 |
+
+On the 72 cases the agent is a regression under the pre-registered rule: it flags 7 fewer suspicious cases in each run, because lookups that report the absence of a risk ("not listed", "not in itself structuring") pull the review towards CLEAR. On cases whose signal is in the account history it meets its rule, but most of that gain comes from the history itself: the fixed review given the same history summary flags 10 of 12. About 2% of reviews in both modes ran away to 20,000 to 260,000 output tokens, most of them while answering with a call to a built-in code tool instead of the verdict; they cost 40% of the evaluation. Details: [docs/EVALUATION.md](docs/EVALUATION.md#investigation-agent-evaluation).
+
 ## Architecture
 
 All steps run inside the Streamlit app (`app.py`), starting from a ledger CSV that is loaded and schema-checked with Decimal amounts.
@@ -155,6 +170,9 @@ pytest tests/ -v   # the 3 tests that need the full install skip under requireme
 python scripts/generate_sample_ledger.py  # fixed seed, so the numbers above reproduce exactly
 python scripts/evaluate.py                # recall and precision by laundering type
 python scripts/eval_llm_tier.py           # AI review tier vs labelled cases, fake model by default; see docs/EVALUATION.md
+python scripts/eval_llm_tier.py --engine agent   # the investigation agent, with tool-selection scores
+python scripts/eval_llm_tier.py --engine fixed+history --cases tests/fixtures/agent_ledger_cases.json
+python scripts/compare_llm_runs.py RUN_A.jsonl RUN_B.jsonl   # discordant cases between two runs
 python scripts/evaluate.py --seeds 7 11 13 17 19 23   # development seed plus held-out seeds
 python scripts/evaluate.py --seeds 7 11 13 17 19 23 --hard   # with the harder patterns
 python scripts/evaluate.py --min-recall 1.0 --min-pattern-recall 1.0 \
@@ -177,6 +195,8 @@ python scripts/eval_external.py --path data/external/HI-Small_Trans.csv --max-ro
 - **The sanctions list is a demo file.** Replace `data/sanctions_list.csv` with an OFAC export, and confirm matches against date of birth and nationality.
 - **SQLite is single-node, and Streamlit is synchronous.** Fine for a few thousand rows; larger batches need Postgres and a job queue.
 - **Retrieval is better than it was and still weak.** On 47 labelled cases the query built from rule hits improves recall@5 from 0.044 to 0.142, precision@5 from 0.123 to 0.260 (about one in four retrieved fragments is relevant) and MRR from 0.217 to 0.476, against a best possible recall@5 of 0.584 for these labels. The gain is confined to the 35 cases with a rule hit. Structuring cases still retrieve none of their labelled fragments, sanctions cases are unchanged, and for rows with no rule hit the first relevant fragment ranks lower than before. The labels and the query have the same author, so the gain is an upper estimate. A generic fallback query or a reranker for rows without a rule hit is a next step, not done. Verdict accuracy on the development set did not move (27/31 before and after). See `docs/EVALUATION.md`.
+- **The investigation agent misses suspicious cases the fixed review flags** (7 of 41 fewer in each of two runs), so it is off by default. Its lookups report the absence of risk in ways the review reads as clearance.
+- **Some reviews run away.** About 2% of Gemini 2.5 Flash reviews, in both modes, spend 20,000 to 260,000 output tokens and up to 14 minutes, most of them while answering with a call to a built-in code tool instead of the verdict; one case became ERROR that way. No output or reasoning cap is set yet; adding one is the first follow-up.
 - **Parallel reviews can exceed Vertex's embedding rate limit.** Rate-limit errors (429) are retried with a longer backoff, but a very low limit can still slow a large run or make some reviews fail and come back as ERROR (never cleared). Setting LLM_MAX_WORKERS=2 instead of the default 4 helps.
 
 ## Roadmap

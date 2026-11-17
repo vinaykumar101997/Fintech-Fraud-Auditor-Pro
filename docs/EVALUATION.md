@@ -522,7 +522,7 @@ All five reviews returned a verdict that validated against the output schema. Re
 
 **What happens to a CLEAR verdict on a reporting-threshold hit.** The rule sets a force-review flag, so the funnel cannot drop the row and it always reaches the AI tier; the rule reasons are recorded in the audit log when the row is forwarded. The CLEAR verdict is then recorded in the audit log with its rationale, and the row stays in the investigative ledger, where "Why was a transaction forwarded?" still lists the threshold rule. From there a CLEAR row is not offered for SAR drafting or the officer-review panel, which list SUSPICIOUS rows only. The network check can still be run on it, but the CLEAR verdict adds no points, so it pauses for an officer only if network patterns or missing counterparty data reach the review threshold on their own. The pipeline has no threshold-report path: the reporting-threshold rule only forces an AI review, and nothing files or queues a report for amounts over the threshold. Both CLEAR rationales noted that a threshold report is still required; that filing has to happen outside this tool.
 
-**Cost and time.** Each review makes two model calls (retrieval-grounded analysis, then the structured review). The five took 119.5 s in total, about 24 s per transaction, and used roughly 11,000 input and 3,900 output tokens, about $0.01 to $0.02 at list prices.
+**Cost and time.** Each review makes two model calls (retrieval-grounded analysis, then the structured review). The five took 119.5 s in total, about 24 s per transaction, and used roughly 11,000 input and 3,900 visible output tokens, at least $0.01 to $0.02 at list prices (reasoning tokens were not counted; see the corrected cost note under "LLM tier evaluation").
 
 **Limits.**
 
@@ -568,6 +568,8 @@ Without `--live` the harness uses a deterministic fake model and a fake retrieve
 | always-suspicious | 18/31 | 18/31 | 18/18 | 0/31 | 0 |
 | error | 0/31 | n/a (none predicted) | 0/18 | 31/31 | 0 |
 
+**Cost figures in this section (corrected).** Every cost and output-token figure below was measured before the harness counted reasoning tokens. On Gemini 2.5 Flash `output_tokens` leaves out the reasoning ("thinking") tokens, which are billed as output, and the runs below did not record them, so their true cost cannot be recomputed. Each figure is therefore restated as a lower bound on visible output only. The same fixed review, measured with reasoning counted (see "Investigation agent evaluation" below), costs $0.0065 to $0.0076 per case on the held-out and no-rule sets, and $0.0165 and $0.0279 per case on the development set, where answers that ran away to about 65,000 output tokens dominate the cost.
+
 **Development baseline (two live runs, same configuration).** Vertex AI, Gemini 2.5 Flash, the 31 development cases:
 
 | | Run 1 | Run 2 |
@@ -578,8 +580,8 @@ Without `--live` the harness uses a deterministic fake model and a fake retrieve
 | Clean cases cleared | 2/13 | 3/13 |
 | Errored reviews | 1 | 0 |
 | Model calls | 67 | 63 |
-| Output tokens | 345,763 | 29,037 |
-| Estimated cost | about $0.89 | about $0.09 |
+| Output tokens (visible only) | 345,763 | 29,037 |
+| Estimated cost (lower bound, reasoning not counted) | at least $0.89 | at least $0.09 |
 
 In run 1 one review failed after four attempts because the model called a built-in tool instead of returning the structured assessment; it was reported as ERROR and none was counted as CLEAR. The cause of the twelvefold difference in output tokens between the runs is unknown. A review takes about 22 seconds and two model calls. Run-to-run differences of one or two cases are noise, not a change in quality. Only run 2 has per-case records (`--cases-out`).
 
@@ -597,14 +599,14 @@ In run 1 one review failed after four attempts because the model called a built-
 **Change 1 result (development set).**
 
 - Result against the rule: clean cases cleared 7/13 (needed 8; baseline 2 and 3), FAIL. No SUSPICIOUS case that was correct in run 2 changed to CLEAR, PASS; the pass-through case PT-01 did flip to CLEAR, which is outside the rule, and its rationale cites the new sentence. Errored reviews 0, PASS. Change 1 is recorded as a negative result against the rule.
-- Other figures: accuracy 23/31; SUSPICIOUS recall 16/18 (15/15 without pass_through); SUSPICIOUS precision 16/22; false positives down from 10 to 6; obvious_clear from 3/7 to 6/7; over_threshold_legitimate from 0/6 to 1/6. The run used 65 model calls and 154,602 output tokens, about $0.41. Two cases (OC-02, OC-07) produced about 62,000 to 66,000 output tokens each, with retries and more than 240 seconds each; the other 29 averaged about 880. The cause is unconfirmed.
+- Other figures: accuracy 23/31; SUSPICIOUS recall 16/18 (15/15 without pass_through); SUSPICIOUS precision 16/22; false positives down from 10 to 6; obvious_clear from 3/7 to 6/7; over_threshold_legitimate from 0/6 to 1/6. The run used 65 model calls and 154,602 visible output tokens, at least $0.41 (reasoning not counted). Two cases (OC-02, OC-07) produced about 62,000 to 66,000 output tokens each, with retries and more than 240 seconds each; the other 29 averaged about 880. The cause is unconfirmed.
 - Themes in the six clean cases still flagged: the reporting-threshold line read as a duty to escalate (4); missing wire-message or purpose data despite the new sentence (3); escalation on ambiguity (2 to 3); a solicitor's client account (1); an irrelevant citation (1).
 - Policy: changes are cumulative. Change 1 stays in the reviewer prompt, and each later change is tested on top of it, in the order listed above. The held-out set has not been run; it is run once, after a change passes the development rule.
 
 **Change 2 result (development set).**
 
 - Change 2 removed the sentence about weighing the cost of a missed filing against an unnecessary one and preferring escalation when the evidence is ambiguous; change 1 stays in. Result against the rule: clean cases cleared 11/13 (needed 8; run 2 3/13; change 1 7/13), PASS. No SUSPICIOUS case that was correct in run 2 changed to CLEAR (15/15 outside pass_through), PASS. Errored reviews 0, PASS.
-- Figures (run 2 / change 1 / change 2): accuracy 20/31, 23/31, 27/31; SUSPICIOUS recall 17/18, 16/18, 16/18 (15/15 without pass_through); SUSPICIOUS precision 17/27, 16/22, 16/18; false positives 10, 6, 2; model calls 63, 65, 62; output tokens 29,037, 154,602, 29,228; cost about $0.09, $0.41, $0.09. A review took 26.6 seconds on average; PI-04 took 217 seconds with 585 output tokens.
+- Figures (run 2 / change 1 / change 2): accuracy 20/31, 23/31, 27/31; SUSPICIOUS recall 17/18, 16/18, 16/18 (15/15 without pass_through); SUSPICIOUS precision 17/27, 16/22, 16/18; false positives 10, 6, 2; model calls 63, 65, 62; visible output tokens 29,037, 154,602, 29,228; cost at least $0.09, $0.41, $0.09 (reasoning not counted). A review took 26.6 seconds on average; PI-04 took 217 seconds with 585 output tokens.
 - Still flagged: OC-07, which reads the row as a wire message and claims the counterparty jurisdiction is missing although the record gives one, and OT-03, a payment to a solicitor's client account that the author judged ambiguous.
 - Limits: this is one run, so the improvement from 7 to 11 is larger than the documented noise but not replicated. PT-01, a pass-through case flagged correctly in run 2 without the review being able to see its signal, is CLEAR again. Every SUSPICIOUS case in both case sets has a rule reason, so neither set measures what removing the escalate-on-ambiguity sentence costs on suspicious cases without a rule hit; a third case set for that is needed before this prompt is treated as the default.
 - Next: the held-out set is run once with this prompt, under the acceptance rule above, and the result is reported whatever it is.
@@ -612,7 +614,7 @@ In run 1 one review failed after four attempts because the model called a built-
 **Held-out result (single run).**
 
 - Run once with the change 2 prompt on the 21 held-out cases, with no code or prompt changes afterwards. Against the rule: clean cases cleared 10/10 (needed 6), PASS; SUSPICIOUS cases correct 11/11 (needed 10), PASS; errored reviews 0.
-- Figures: accuracy 21/21 (Wilson 95% CI 85% to 100%); SUSPICIOUS recall 11/11 and precision 11/11 (CI 74% to 100% each); the clean-case rate of 10/10 has a lower bound of about 72%. The run used 42 model calls and 19,589 output tokens, about $0.06, and took 17.8 seconds per case on average; no case took over 100 seconds or produced over 5,000 output tokens.
+- Figures: accuracy 21/21 (Wilson 95% CI 85% to 100%); SUSPICIOUS recall 11/11 and precision 11/11 (CI 74% to 100% each); the clean-case rate of 10/10 has a lower bound of about 72%. The run used 42 model calls and 19,589 visible output tokens, at least $0.06 (reasoning not counted), and took 17.8 seconds per case on average; no case took over 100 seconds or produced over 5,000 output tokens.
 - How to read it: the held-out cases were written after the development failures had been inspected, by the author who also labelled them; they leave out the ambiguous solicitor's client-account pattern; and every SUSPICIOUS case has a rule reason. The run therefore shows a reduction in false positives on unseen clean cases. It does not show detection of suspicious cases without a rule hit, and it does not show that removing the escalate-on-ambiguity sentence is safe for them. The prompt is not validated for that case.
 - Open: a third case set of suspicious cases without a rule reason, written and committed before it is run, is needed before the current prompt is treated as the default.
 
@@ -633,8 +635,8 @@ In run 1 one review failed after four attempts because the model called a built-
 | Clean controls cleared | 7/8 | 3/8 |
 | Errored reviews | 0 | 0 |
 | Model calls | 40 | 40 |
-| Output tokens | 18,389 | 18,025 |
-| Estimated cost | about $0.06 | about $0.06 |
+| Output tokens (visible only) | 18,389 | 18,025 |
+| Estimated cost (lower bound, reasoning not counted) | at least $0.06 | at least $0.06 |
 | Average time per case | 23.0 s | 29.6 s |
 | Cases over 100 s | none | N-07 (129 s) |
 
@@ -750,8 +752,8 @@ Mean recall@5 by topic (a case with several topics counts under each):
 | Clean cases cleared | 11/13 | 12/13 |
 | Errored reviews | 0 | 0 |
 | Model calls | 62 | 64 (two calls retried after a 429) |
-| Output tokens | 29,228 | 22,115 |
-| Estimated cost | about $0.09 | $0.0745 |
+| Output tokens (visible only) | 29,228 | 22,115 |
+| Estimated cost (lower bound, reasoning not counted) | at least $0.09 | at least $0.0745 |
 | Average time per case | 26.6 s | 15.5 s (longest 24.4 s) |
 
 - Two cases changed. OC-07, a salary payment flagged in the earlier run, is now CLEAR, which is correct. PT-02, a pass-through case, went from SUSPICIOUS to CLEAR; the review cannot see the signal of the pass-through cases, so its earlier flag was not based on evidence, but it counts as a lost detection in the table. OT-03, the payment to a solicitor's client account, is still flagged.
@@ -761,3 +763,211 @@ Mean recall@5 by topic (a case with several topics counts under each):
 - pass_through is unchanged as a limitation: the review does not receive the behaviour-model flags, so a retrieval change cannot reach those cases.
 
 **Next steps (not done).** The cases without a rule hit need retrieval that does not depend on rule hits, for example a generic fallback query for those rows or a reranker over a wider candidate set; neither has been built or measured. The structuring and sanctions topics are also still open, and any change to the topic phrases needs labels it was not written against.
+
+## Investigation agent evaluation
+
+The review makes one fixed retrieval call and then one structured review call. The investigation agent is an optional alternative, switched on with `REVIEW_MODE=agent` (default `fixed`): the model decides which read-only tools to call, under a hard cap on model calls, tool calls and tokens, and the same structured review then returns the verdict. The plan and the acceptance rules below were written and frozen before the agent code existed and before any agent output; the results follow them.
+
+### Pre-registered plan
+
+**Tools (frozen).** Five read-only tools. Their arguments are fixed choices, never free text, so no counterparty text can reach a search.
+
+| Tool | Argument | Returns |
+|---|---|---|
+| `screen_party` | `role`: originator or beneficiary | Best watchlist candidate for that party, its score, the match threshold, and whether it is a match |
+| `country_risk` | none | The counterparty jurisdiction resolved to an ISO code and name, and whether it is on the high-risk or secrecy list, or that it does not resolve |
+| `explain_rule` | `rule_id`: one of the rule ids in `utils/rule_ids.py` | What the rule checks and its configured thresholds |
+| `party_history` | `role`: originator or beneficiary | That account's activity in the loaded ledger (payments sent and received, structuring-band count, distinct counterparties, one-off senders, forwarding chain and fund-flow cycles through the transaction), or that no ledger is loaded |
+| `search_guidance` | `topics`: one to three of the typology ids in `utils/retrieval_query.py`, or general monitoring | The numbered guidance fragments that a query built from those topics and the case's own facts retrieves |
+
+**Labels.** `tests/fixtures/agent_tool_labels.json`, SHA-256 `cdae6ed8c335e898b2b1797a125123343ccd24f0507eadaca833c37c74f4c539` (LF line endings). For each of the 92 cases it lists the tools a careful analyst would need (`required`) and the tools that only check or restate what the record says (`acceptable`); any other call is unnecessary. The labelling rules are in the file. In short: `search_guidance` is required when the expected verdict is SUSPICIOUS or a rule fired; `screen_party` is required only on N-05, N-06 and N-12 (a public-office title or a coin-mixing service with no sanctions hit) and acceptable elsewhere; `country_risk` is acceptable everywhere and required nowhere; `explain_rule` is acceptable where a rule fired; `party_history` is required on every ledger-backed case and never on the 72 cases without a ledger. Required tools in total: 69 `search_guidance`, 20 `party_history`, 3 `screen_party`.
+
+**Ledger-backed cases.** `tests/fixtures/agent_ledger_cases.json`, SHA-256 `02b256015a16548b374c1e5a2d1ad163f7f69e100bde0ee8e3f2350d6ed743b5` (LF line endings). 20 rows of the ledger that `generate(seed=7, hard=True)` produces: 12 SUSPICIOUS (4 pass-through chain legs, 3 fan-in legs, 3 structuring legs from one sender, 2 legs of small rings) and 8 CLEAR (3 band or over-threshold payments and 5 ordinary payments between the same established businesses that run the pass-through chains). The expected verdict is the generator's `is_laundering` label for the row. In every SUSPICIOUS case the decisive signal is in the account history: 9 of the 12 have no rule hit, and the record of a pass-through leg looks like the record of an ordinary payment between the same two businesses. The whole generated batch (514 rows) is the ledger `party_history` reads, as the app reads the loaded batch.
+
+**Arms.**
+
+- Development, held-out and no-rule sets (72 cases): `fixed` (the review as it stands) and `agent`. Both receive the same information: the agent's `party_history` returns "no ledger loaded" on these cases. This is the parity check.
+- Ledger-backed set (20 cases): `fixed`, `fixed+history` (the fixed review with the same history summary that `party_history` returns, for both parties, added to the record) and `agent` with the ledger loaded. `fixed+history` separates the value of the information from the value of letting the model choose what to look up.
+
+**Procedure.**
+
+1. Provider: Vertex `gemini-2.5-flash`, temperature 0. Prices used for every estimate: $0.30 per million input tokens and $2.50 per million output tokens, thinking tokens included (checked on 14 November 2026 against third-party price listings, which agree with each other; Google's own pricing page could not be read at the time).
+2. The agent's instruction text and tool descriptions are adjusted on the development set only. They are then frozen: the SHA-256 of `utils/investigation.py` and `utils/agent_tools.py` is recorded here before the held-out, no-rule or ledger-backed set is run with the agent, and nothing is changed afterwards. Development runs made while adjusting are reported as such and are not part of the comparison.
+3. A fresh fixed-pipeline run on all 72 cases is made in the same session as the agent runs, against the same index. The figures published earlier are not used as the baseline.
+4. Two runs per arm on every set, one case at a time, with a pause between model calls, each case written to a JSONL file as soon as it finishes. A run stopped by quota is reported as stopped, not as completed.
+5. Cost ceiling for all live runs together: $5. Before each run, its cost is projected from the cost measured so far; a run that would take the total past $5 is not started.
+
+*Deviations recorded after the plan was written:* (a) on 16 November 2026, after fixed run 1, the projection showed the plan could not finish under $5 (answers that ran away to tens of thousands of tokens cost far more than expected), the runs were stopped, and the ceiling was raised to $7; no rule, threshold, case or label was changed. (b) The price sentence in item 1 was corrected after it was written: the date and the source of the prices, not the prices. (c) Two design points differ from the outline the tools were planned from: the guidance search is retried like the fixed review's retrieval, and the final review receives the short lookup results with the notes (both recorded under "Before the first live run" below).
+
+**Metrics, per arm and per run.** Verdict accuracy, SUSPICIOUS precision and recall (Wilson 95% intervals), clean cases cleared, reviews that errored, errored reviews counted as CLEAR, and accuracy per category. Discordant pairs against the paired arm on the same cases: `b` = cases the agent gets right and the comparison arm gets wrong, `c` = the reverse, reported separately for SUSPICIOUS and CLEAR cases. Tool selection: recall = required tools called / required tools (cases with no required tool are left out), precision = distinct tools called that are required or acceptable / distinct tools called (cases with no call are counted as "no calls"), both pooled over cases; for the ledger-backed set also whether `party_history` was called for the labelled role. Mean tool calls, model calls, input and output tokens and estimated cost per case; mean and 95th-percentile seconds per case.
+
+**Acceptance rule, 72 cases (agent against fixed, each agent run paired with a fixed run).**
+
+- Hard fail: any errored review counted as CLEAR; fewer than 4 of the 4 prompt-injection cases SUSPICIOUS; more than 3 of 72 reviews errored in either run.
+- Regression: on SUSPICIOUS cases, `c - b >= 2` in either run; or clean cases cleared lower by 2 or more than in the paired fixed run.
+- Acceptable to keep as an option: no hard fail and no regression in either run, mean cost per case at most 5 times the fixed review's, and 95th-percentile time per case at most 60 seconds.
+- Better than fixed: `b - c >= 3` on SUSPICIOUS cases in both runs. With 72 cases and run-to-run noise of one or two cases, this is not expected.
+
+**Acceptance rule, ledger-backed set (20 cases).**
+
+- Hard fail: any errored review counted as CLEAR; more than 1 of 20 reviews errored in either run.
+- Regression against `fixed+history`: on SUSPICIOUS cases, `c - b >= 2` in either run; or clean cases cleared lower by 2 or more.
+- Gain from the history tool: against `fixed`, `b - c >= 3` on SUSPICIOUS cases in both runs, with clean cases cleared not lower by 2 or more.
+- Acceptable to keep as an option: no hard fail, no regression against `fixed+history`, the gain against `fixed` in both runs, mean cost per case at most 5 times `fixed`'s, and 95th-percentile time per case at most 60 seconds.
+- If `fixed+history` does as well as the agent, the gain belongs to the information, not to the model choosing what to look up, and adding the history summary to the fixed review is the simpler change.
+
+**Reported whatever the outcome.** The agent may come out no better, or worse, than the fixed review. That is reported as measured, every regression is listed, and `fixed` stays the default unless the rules above say otherwise.
+
+**Disclosure.** The labels, the choice of ledger rows, the tools and the agent's instruction text have the same author. The labels and the case file were frozen by the hashes above before any agent code existed, but the author knew the case sets and the earlier per-case results of the fixed review when writing them.
+
+### Adjustment on the development set and the frozen state
+
+Recorded before any held-out, no-rule or ledger-backed case was run with the agent, and before the comparison runs.
+
+**Before the first live run** (from code review and one live call on ST-02, not from results): the record shows the case id, never the generator's row id (`ESTP-`, `FAN-`, `TXN-`... differ by pattern and would give the label away; the ledger is still read under the row id); the guidance search is retried through the shared retry wrapper, like the fixed review's retrieval call; the review is given the short lookup results as returned next to the investigator's notes (everything but the guidance fragments), so it sees the same history figures `fixed+history` sees; and token counts include reasoning tokens. On Gemini 2.5 Flash `output_tokens` leaves out the reasoning ("thinking") tokens, which are billed as output (`total_tokens` = input + output + reasoning; on the ST-02 call, 741 + 81 + 564 = 1,386). The meter in `scripts/eval_llm_tier.py` read `output_tokens` only, so **the costs published above for earlier runs of the fixed review are too low**; every cost in this section counts reasoning as output.
+
+**Development run used for adjustment** (31 cases, agent, before the freeze; not part of the comparison): accuracy 28/31, SUSPICIOUS recall 16/18, clean cleared 12/13, no errors; 6.74 tool calls, 4.61 model calls, 35.5 s (95th percentile 41.1 s) and $0.0152 per case. The investigator looked up nearly everything on nearly every case (both parties screened, both parties' history, the country, rules that had not fired), and it called `party_history` for both parties on all 31 cases (62 calls), although none of these cases has a ledger. One case (OT-06) spent 68,549 output tokens in the final review, the same review call the fixed review makes, with one retried answer; Vertex has no output cap configured, so the fixed review carries the same risk.
+
+**Changes made after that run:** the investigation is told when no ledger is loaded or no guidance index is connected (so `party_history` and `search_guidance` are not called to find that out), and to explain only rules that fired. These changes were not run live before the freeze. A second development run was planned only if the projected total stayed under $5; with the measured cost per case it would not have, so it was not made.
+
+**Frozen state.** SHA-256 of each file with LF line endings:
+
+| File | SHA-256 |
+|---|---|
+| `utils/investigation.py` | `51d3c01cc941a9e11bf31c56b55c627854093608ffb3ce45eecb66e29212eb9c` |
+| `utils/agent_tools.py` | `8cb3c1184646d8c18e8da882a7ce2a24389f23021f4eb8a5d5244b273a543b19` |
+| `utils/agents.py` | `ef92dbbc51385152a567eb6044944798317ae332c10bf6a396369b720a847801` |
+| `utils/sanitize.py` | `ddbf7f2596a866fece5dfbd6076b88eebe62e3604fdb3c1a8c9e7e8d142ba29c` |
+| `utils/retrieval_query.py` | `bf9aa6227fbff9ff5e12c2bd4a76ecdeb09f4b1d197df6b9bb9fe9001110d7dd` |
+| `utils/rag_chain.py` | `8b4d0f6856b35663282f49f6af80549695a20b1434766629f0b5c8ee7fafa17e` |
+| `utils/trace.py` | `6904df3279d08707ab9afce3541da9acda3f0a26b8db211df88a822b46b2e78a` |
+| `scripts/eval_llm_tier.py` | `2e6d6fe5f895cbcaa2aff2e23a9e3d8b114f0257f4be22a5e968b206f767e6a4` |
+
+Settings: `AGENT_MAX_MODEL_CALLS=6`, `AGENT_MAX_TOOL_CALLS=8`, `AGENT_MAX_INPUT_TOKENS=40000`, `AGENT_MAX_OUTPUT_TOKENS=8000` (reasoning included), `AGENT_TOOL_RESULT_CHARS=9000`, `LLM_MAX_RETRIES=3`, `RETRIEVER_K=5`, `LLM_TEMPERATURE=0`.
+
+The instruction-text change listed above (telling the investigation up front when no ledger or guidance index is available, and to explain only rules that fired) was made after the single development run and was not run live on the development set before the comparison runs; every comparison figure below is its first live measurement. A cap on output or reasoning tokens for the model calls is a recommended follow-up that was deliberately not applied here, so that the fixed review is measured exactly as it runs today.
+
+### Results
+
+All runs used Vertex `gemini-2.5-flash` against the same 410-fragment index, one case at a time with a 2-second pause after each model call. The frozen files were checked against the hashes above after the last run and were unchanged. Order: fixed run 1 and agent run 1 on the 72 cases, fixed run 2, agent run 2, then on the ledger-backed set fixed, `fixed+history` and agent run 1, and the same three again. Throttling (HTTP 429) occurred a few times and every instance succeeded on retry; no run was stopped by quota. Total live spend, including the development run and one smoke call: $5.93.
+
+**72 cases, per arm and run.** Precision is SUSPICIOUS precision; Wilson 95% intervals are in the second table. Seconds are per case. A runaway is a case whose calls produced more than 20,000 output tokens (the largest output of any other case in any arm was 7,178); p95 without runaways is a secondary figure, and the acceptance rule is judged on the p95 with every case.
+
+| | Fixed run 1 | Agent run 1 | Fixed run 2 | Agent run 2 |
+|---|---|---|---|---|
+| Verdict accuracy | 65/72 | 60/72 | 64/72 | 62/72 |
+| SUSPICIOUS recall | 37/41 | 30/41 | 39/41 | 32/41 |
+| SUSPICIOUS precision | 37/40 | 30/31 | 39/44 | 32/33 |
+| Clean cases cleared | 28/31 | 30/31 | 25/31 | 30/31 |
+| Reviews that errored | 0 | 0 | 1 (OT-05) | 1 (N-03) |
+| Errored reviews counted as CLEAR | 0 | 0 | 0 | 0 |
+| Prompt-injection cases SUSPICIOUS | 4/4 | 4/4 | 4/4 | 4/4 |
+| Model calls (mean) | 2.01 | 3.99 | 2.04 | 4.03 |
+| Tool calls (mean) | 0 | 4.54 | 0 | 4.62 |
+| Input / output tokens (mean) | 2,008 / 4,087 | 6,359 / 5,315 | 2,032 / 6,189 | 6,375 / 5,199 |
+| Cost per case | $0.0108 | $0.0152 | $0.0161 | $0.0149 |
+| Seconds, mean / p95 | 23.8 / 25.9 | 33.6 / 38.1 | 32.2 / 28.5 | 34.6 / 36.9 |
+| p95 without runaways (secondary) | 25.1 | 34.2 | 25.9 | 36.4 |
+
+Wilson 95% intervals:
+
+| | Fixed run 1 | Agent run 1 | Fixed run 2 | Agent run 2 |
+|---|---|---|---|---|
+| Verdict accuracy | 81% to 95% | 73% to 90% | 80% to 94% | 76% to 92% |
+| SUSPICIOUS recall | 77% to 96% | 58% to 84% | 84% to 99% | 63% to 88% |
+| SUSPICIOUS precision | 80% to 97% | 84% to 99% | 76% to 95% | 85% to 99% |
+| Clean cases cleared | 75% to 97% | 84% to 99% | 64% to 91% | 84% to 99% |
+
+Accuracy per category:
+
+| Category | Fixed run 1 | Agent run 1 | Fixed run 2 | Agent run 2 |
+|---|---|---|---|---|
+| obvious_clear | 16/18 | 18/18 | 16/18 | 18/18 |
+| over_threshold_legitimate | 12/13 | 12/13 | 9/13 | 12/13 |
+| structuring | 7/7 | 4/7 | 7/7 | 4/7 |
+| high_risk_jurisdiction | 14/14 | 9/14 | 14/14 | 11/14 |
+| layering_shell | 11/13 | 12/13 | 13/13 | 12/13 |
+| pass_through | 1/3 | 1/3 | 1/3 | 1/3 |
+| prompt_injection | 4/4 | 4/4 | 4/4 | 4/4 |
+
+By set (development cases were used to adjust the agent; held-out and no-rule were not):
+
+| Set | Fixed run 1 | Agent run 1 | Fixed run 2 | Agent run 2 |
+|---|---|---|---|---|
+| Development (31): accuracy, recall, clean | 28/31, 16/18, 12/13 | 27/31, 14/18, 13/13 | 27/31, 16/18, 11/13 | 26/31, 13/18, 13/13 |
+| Held-out (21) | 21/21, 11/11, 10/10 | 18/21, 8/11, 10/10 | 20/21, 11/11, 9/10 | 21/21, 11/11, 10/10 |
+| No-rule (20) | 16/20, 10/12, 6/8 | 15/20, 8/12, 7/8 | 17/20, 12/12, 5/8 | 15/20, 8/12, 7/8 |
+| Held-out and no-rule together (41) | 37/41, 21/23, 16/18 | 33/41, 16/23, 17/18 | 37/41, 23/23, 14/18 | 36/41, 19/23, 17/18 |
+
+Discordant cases, agent against the fixed run of the same number (`b` = agent right and fixed wrong, `c` = the reverse):
+
+| | SUSPICIOUS b | SUSPICIOUS c | CLEAR b | CLEAR c |
+|---|---|---|---|---|
+| Run 1 | 1 (N-09) | 8 (H-13, H-14, H-15, N-03, N-04, N-06, ST-01, ST-03) | 3 (N-19, N-20, OT-03) | 1 (N-13) |
+| Run 2 | 1 (PT-03) | 8 (N-03 errored, N-04, N-06, N-07, PT-02, ST-01, ST-03, ST-04) | 5 (H-08, N-19, N-20, OT-03, OT-05 errored in fixed) | 0 |
+
+**Against the acceptance rule for the 72 cases.**
+
+- Hard fail: none. No errored review was counted as CLEAR, the 4 prompt-injection cases were SUSPICIOUS in both runs, and 0 and 1 reviews errored (limit 3).
+- Regression: yes, in both runs. On SUSPICIOUS cases `c - b` is 7 in run 1 and 7 in run 2 (the rule is 2 or more). Clean cases cleared were higher, not lower (30/31 against 28/31 and 25/31).
+- Cost (1.4 and 0.9 times the fixed review per case, limit 5) and 95th-percentile time (38.1 and 36.9 s, limit 60) are within the rule, but the regression decides it: **the agent is not acceptable as an option on these cases, and `fixed` stays the default.**
+- The regression does not come from the cases the agent was adjusted on: on the 41 held-out and no-rule cases alone, `c - b` on SUSPICIOUS cases is 5 in run 1 and 4 in run 2.
+- It is not better than the fixed review on any pre-registered measure for these cases. It trades suspicious detections for cleared clean cases: 7 fewer suspicious cases flagged in each run against 2 and 5 more clean cases cleared.
+
+**Why the agent misses suspicious cases.** Read from the per-case notes and rationales of every SUSPICIOUS case the agent missed and the fixed review flagged, in both runs, after the runs; nothing was changed in response. All of them follow the pattern below. The lookups mostly return negative facts: a party not on the watchlist, a jurisdiction not on the configured lists, and the rule explanation "one payment in the band is not in itself structuring". The review takes these as reasons to clear. ST-01 was cleared with that sentence quoted; N-03 (Yemen) and N-06 (a regional governor's family trust) because the jurisdiction "is not on any high-risk or secrecy lists", although the lists are short by design; H-14 (Syria, on the high-risk list) because nothing else was found. The fixed review, which gets no such lookups, flags all of these. N-03 in run 2 errored because the investigation explained five rules that had not fired and reached the limit of 8 lookups.
+
+**Tool selection, 72 cases.** Required tools called: 57/57 and 56/57; calls that were required or acceptable: 243/244 and 244/246 (two `explain_rule` calls were unnecessary, one `search_guidance` was missed). The investigation calls nearly every lookup the labels allow, which is why precision is high: on these cases almost every tool is acceptable. `party_history` was no longer called on cases without a ledger after the instruction-text change (62 calls on 31 cases in the development run, none in the four comparison runs on these cases).
+
+**Ledger-backed set (20 cases), per arm and run.**
+
+| | Fixed 1 | +history 1 | Agent 1 | Fixed 2 | +history 2 | Agent 2 |
+|---|---|---|---|---|---|---|
+| Verdict accuracy | 10/20 | 17/20 | 19/20 | 10/20 | 17/20 | 20/20 |
+| SUSPICIOUS recall | 3/12 | 10/12 | 11/12 | 3/12 | 10/12 | 12/12 |
+| Clean cases cleared | 7/8 | 7/8 | 8/8 | 7/8 | 7/8 | 8/8 |
+| Reviews that errored | 0 | 0 | 0 | 0 | 0 | 0 |
+| Model / tool calls (mean) | 2.00 / 0 | 2.00 / 0 | 4.60 / 6.40 | 2.00 / 0 | 2.00 / 0 | 4.65 / 6.50 |
+| Cost per case | $0.0068 | $0.0121 | $0.0191 | $0.0066 | $0.0108 | $0.0115 |
+| Seconds, mean / p95 | 19.8 / 23.2 | 28.4 / 42.1 | 49.5 / 49.4 | 19.3 / 23.8 | 27.2 / 37.4 | 29.6 / 33.5 |
+| p95 without runaways (secondary) | 23.2 | 42.1 | 49.4 | 23.8 | 37.4 | 33.5 |
+| SUSPICIOUS recall, Wilson 95% | 9% to 53% | 55% to 95% | 65% to 99% | 9% to 53% | 55% to 95% | 76% to 100% |
+| pass_through / fan_in / circular / structuring_history | 0/4, 0/3, 0/2, 3/3 | 3/4, 2/3, 2/2, 3/3 | 3/4, 3/3, 2/2, 3/3 | 0/4, 0/3, 0/2, 3/3 | 3/4, 2/3, 2/2, 3/3 | 4/4, 3/3, 2/2, 3/3 |
+| clean_large / clean_ordinary | 2/3, 5/5 | 2/3, 5/5 | 3/3, 5/5 | 2/3, 5/5 | 2/3, 5/5 | 3/3, 5/5 |
+
+The fixed review flagged the three structuring legs and nothing else in both runs; every pass-through, fan-in and ring case was cleared. `fixed+history` missed L-04 (the first leg of a forwarding chain, whose sender received nothing just before) and L-07 (fan-in) in run 1, and L-04 and L-05 in run 2. Both fixed arms flagged L-13, a clean band payment.
+
+| Agent against | Run | SUSPICIOUS b | SUSPICIOUS c | CLEAR b | CLEAR c |
+|---|---|---|---|---|---|
+| `fixed` | 1 | 8 | 0 | 1 (L-13) | 0 |
+| `fixed` | 2 | 9 | 0 | 1 (L-13) | 0 |
+| `fixed+history` | 1 | 1 (L-07) | 0 | 1 (L-13) | 0 |
+| `fixed+history` | 2 | 2 (L-04, L-05) | 0 | 1 (L-13) | 0 |
+
+**Against the acceptance rule for the ledger-backed set.** No hard fail (no errors). No regression against `fixed+history` (`c` = 0 in both runs). Gain from the history tool against `fixed`: `b - c` = 8 and 9 (rule: 3 or more in both runs), clean cases cleared not lower. Cost 2.8 and 1.7 times `fixed` per case (limit 5); 95th-percentile time 49.4 and 33.5 s (limit 60). **The agent meets the rule on this set.** Most of the gain belongs to the information, not to the agent choosing what to look up: given the same history summary without tools, the fixed review goes from 3/12 to 10/12 suspicious cases flagged in both runs, and the agent adds 1 to 2 cases and one clean case on top. `party_history` was called for the labelled party in 20/20 cases in both runs; tool recall 33/35 and 35/35, precision 82/84 and 86/86.
+
+**Runaway answers.** These are a finding about the model, not noise, and every one is kept in the results above. The records keep billed output per case (reasoning included) but not the split between reasoning and visible text, so how much of each runaway was reasoning is not known. Where it can be placed: in the agent arm it is the final structured review, because the investigation's own calls are capped at 8,000 output tokens and none was stopped by that cap; in six of the nine cases the run log shows the final review answering at least once with a call to a built-in code tool (`google:python_interpreter`) instead of the verdict schema, which was rejected and retried, each attempt long. For PT-01 in fixed run 1 and L-16 the log shows no retry, and the records do not say which of the fixed review's two calls ran long.
+
+| Arm, run | Case | Output tokens | Cost | Seconds | Review answers rejected and retried | Verdict |
+|---|---|---|---|---|---|---|
+| Fixed, 72 cases, run 1 | OT-05 | 68,018 | $0.1709 | 210.5 | 1 (built-in tool) | correct |
+| Fixed, 72 cases, run 1 | PT-01 | 64,505 | $0.1619 | 194.2 | none | wrong (CLEAR) |
+| Fixed, 72 cases, run 2 | OT-05 | 264,012 | $0.6614 | 869.4 | all 4 attempts (built-in tool) | ERROR |
+| Agent, 72 cases, run 1 | PT-01 | 66,756 | $0.1687 | 244.0 | none | wrong (CLEAR) |
+| Agent, 72 cases, run 1 | H-03 | 132,615 | $0.3335 | 460.2 | 2 (built-in tool) | correct |
+| Agent, 72 cases, run 2 | H-04 | 198,549 | $0.4991 | 742.2 | 3 (built-in tool) | correct |
+| `fixed+history`, ledger, run 1 | L-16 | 20,302 | $0.0519 | 83.9 | none | correct (just over the 20,000 line) |
+| Agent, ledger, run 1 | L-14 | 69,383 | $0.1781 | 406.5 | 1 (built-in tool), 1 throttled | correct |
+| Development run (before the freeze) | OT-06 | 68,549 | about $0.17 | | 1 (built-in tool) | correct |
+
+Other retries in the logs: 16 throttled calls (HTTP 429), 13 in the investigation and 3 in the review, each of which succeeded on the next attempt.
+
+Over the 408 comparison reviews, 8 ran away (2.0%) and cost $2.23 of the $5.44 those runs cost. Without them a case costs $0.0067 with the fixed review and $0.0083 with the agent on the 72 cases, and $0.0067, $0.0104 and $0.0112 for `fixed`, `fixed+history` and the agent on the ledger-backed set. The same OT-05 ran away in both fixed runs, so some cases may be prone to it. The usual-case figures above exclude runaways; the acceptance rule was judged on every case.
+
+**Conclusions.**
+
+- The agent is worse than the fixed review on the 72 cases under the pre-registered rule (a regression of 7 suspicious cases in both runs) and is not recommended as an option there. `REVIEW_MODE=fixed` stays the default.
+- On cases whose signal is in the account history, access to that history is what matters. Adding the history summary to the fixed review closes most of the gap without an agent; that change was not tested on the 72 cases and would need its own pre-registered evaluation.
+- Lookups that report the absence of a risk (not listed, rule "not in itself" suspicious) pull the review towards CLEAR. The wording of `explain_rule` and `country_risk` results is the first thing to change before any further agent evaluation.
+- A cap on output or reasoning tokens is the first follow-up for both modes, on cost and latency grounds: about 2% of reviews spend up to 80 times the usual cost, most of them in review answers that call a built-in code tool instead of returning the verdict, and one case became ERROR that way.
+
+**Limits.** Two runs per arm; run-to-run differences of one or two cases are noise. The development case ids show the category (`OC-`, `ST-`, `HR-`, `PT-`, `PI-`...) to the model in both arms, as they did before this evaluation; the held-out (`H-`), no-rule (`N-`) and ledger-backed (`L-`) ids do not. The labels, the ledger rows and the agent share an author (see Disclosure). The ledger-backed cases are generator rows whose signals the history tool was written to describe. The instruction-text change made after the development run was not run live before the comparison. One provider and one model.

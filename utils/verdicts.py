@@ -8,7 +8,7 @@ to CLEAR.
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 
 class Verdict(str, Enum):
@@ -33,6 +33,8 @@ class AuditOutcome:
     initial_finding: str = ""
     reviewer_note: str = ""
     error_detail: Optional[str] = None
+    # utils.trace.Trace of an investigation-agent review; None for the fixed review.
+    trace: Optional[Any] = None
 
     @classmethod
     def failure(cls, detail: str) -> "AuditOutcome":

@@ -1,0 +1,322 @@
+{
+  "description": "Ledger-backed cases for scripts/eval_llm_tier.py. Each case is one row of the ledger that scripts/generate_sample_ledger.py produces with generate(seed=7, hard=True); the whole generated batch is the ledger the history tool reads. The expected verdict is the generator's is_laundering label for the row, not a judgement written for this file. rule_reasons are the output of utils.rules.evaluate_row for the transaction fields. In every SUSPICIOUS case the decisive signal is in the account history, not in the record.",
+  "ledger": {
+    "generator": "scripts/generate_sample_ledger.py",
+    "seed": 7,
+    "hard": true
+  },
+  "cases": [
+    {
+      "id": "L-01",
+      "category": "pass_through",
+      "expected_verdict": "SUSPICIOUS",
+      "ledger_transaction_id": "ESTP-0-01",
+      "transaction": {
+        "amount": "3821.63",
+        "country": "Australia",
+        "sender": "Eastgate Supplies",
+        "receiver": "Bluepeak Foods"
+      },
+      "rule_reasons": [],
+      "behaviour_flags": [],
+      "note": "Second leg of a chain of three: the sender received a payment of almost the same amount three hours earlier and passes it on."
+    },
+    {
+      "id": "L-02",
+      "category": "pass_through",
+      "expected_verdict": "SUSPICIOUS",
+      "ledger_transaction_id": "ESTP-1-02",
+      "transaction": {
+        "amount": "2929.43",
+        "country": "Australia",
+        "sender": "Eastgate Supplies",
+        "receiver": "Fairline Travel"
+      },
+      "rule_reasons": [],
+      "behaviour_flags": [],
+      "note": "Last leg of a chain of three, each business forwarding 95-100% within three hours."
+    },
+    {
+      "id": "L-03",
+      "category": "pass_through",
+      "expected_verdict": "SUSPICIOUS",
+      "ledger_transaction_id": "ESTP-2-01",
+      "transaction": {
+        "amount": "2662.02",
+        "country": "USA",
+        "sender": "Acme Logistics",
+        "receiver": "Delta Print Works"
+      },
+      "rule_reasons": [],
+      "behaviour_flags": [],
+      "note": "Middle leg of a forwarding chain between established businesses."
+    },
+    {
+      "id": "L-04",
+      "category": "pass_through",
+      "expected_verdict": "SUSPICIOUS",
+      "ledger_transaction_id": "ESTP-2-00",
+      "transaction": {
+        "amount": "2762.51",
+        "country": "Japan",
+        "sender": "Northwind Retail",
+        "receiver": "Acme Logistics"
+      },
+      "rule_reasons": [],
+      "behaviour_flags": [],
+      "note": "First leg of a forwarding chain: the receiver passes it on within three hours."
+    },
+    {
+      "id": "L-05",
+      "category": "fan_in",
+      "expected_verdict": "SUSPICIOUS",
+      "ledger_transaction_id": "FAN-003",
+      "transaction": {
+        "amount": "6230.24",
+        "country": "USA",
+        "sender": "Courier Agent 3",
+        "receiver": "Pinnacle Collections"
+      },
+      "rule_reasons": [],
+      "behaviour_flags": [],
+      "note": "One of eleven one-off senders paying the same collection account within a few hours."
+    },
+    {
+      "id": "L-06",
+      "category": "fan_in",
+      "expected_verdict": "SUSPICIOUS",
+      "ledger_transaction_id": "FAN-008",
+      "transaction": {
+        "amount": "5102.80",
+        "country": "USA",
+        "sender": "Courier Agent 8",
+        "receiver": "Pinnacle Collections"
+      },
+      "rule_reasons": [],
+      "behaviour_flags": [],
+      "note": "One of eleven one-off senders paying the same collection account within a few hours."
+    },
+    {
+      "id": "L-07",
+      "category": "fan_in",
+      "expected_verdict": "SUSPICIOUS",
+      "ledger_transaction_id": "FAN-010",
+      "transaction": {
+        "amount": "5854.91",
+        "country": "USA",
+        "sender": "Courier Agent 10",
+        "receiver": "Pinnacle Collections"
+      },
+      "rule_reasons": [],
+      "behaviour_flags": [],
+      "note": "One of eleven one-off senders paying the same collection account within a few hours."
+    },
+    {
+      "id": "L-08",
+      "category": "structuring_history",
+      "expected_verdict": "SUSPICIOUS",
+      "ledger_transaction_id": "STR-000",
+      "transaction": {
+        "amount": "9001.30",
+        "country": "USA",
+        "sender": "Larkspur Trading",
+        "receiver": "Shell Holdings 0"
+      },
+      "rule_reasons": [
+        "Value 9,001.30 sits in the structuring band (8,000-10,000), just below the reporting threshold."
+      ],
+      "behaviour_flags": [],
+      "note": "One of ten payments from this sender between 8,600 and 9,850 over about 30 hours."
+    },
+    {
+      "id": "L-09",
+      "category": "structuring_history",
+      "expected_verdict": "SUSPICIOUS",
+      "ledger_transaction_id": "STR-008",
+      "transaction": {
+        "amount": "9568.75",
+        "country": "USA",
+        "sender": "Larkspur Trading",
+        "receiver": "Shell Holdings 2"
+      },
+      "rule_reasons": [
+        "Value 9,568.75 sits in the structuring band (8,000-10,000), just below the reporting threshold."
+      ],
+      "behaviour_flags": [],
+      "note": "One of ten payments from this sender between 8,600 and 9,850 over about 30 hours."
+    },
+    {
+      "id": "L-10",
+      "category": "structuring_history",
+      "expected_verdict": "SUSPICIOUS",
+      "ledger_transaction_id": "STR-009",
+      "transaction": {
+        "amount": "9770.93",
+        "country": "USA",
+        "sender": "Larkspur Trading",
+        "receiver": "Shell Holdings 0"
+      },
+      "rule_reasons": [
+        "Value 9,770.93 sits in the structuring band (8,000-10,000), just below the reporting threshold."
+      ],
+      "behaviour_flags": [],
+      "note": "One of ten payments from this sender between 8,600 and 9,850 over about 30 hours."
+    },
+    {
+      "id": "L-11",
+      "category": "circular",
+      "expected_verdict": "SUSPICIOUS",
+      "ledger_transaction_id": "CIRS-0-01",
+      "transaction": {
+        "amount": "4231.61",
+        "country": "Canada",
+        "sender": "Loop0-1",
+        "receiver": "Loop0-2"
+      },
+      "rule_reasons": [],
+      "behaviour_flags": [],
+      "note": "Leg of a three-account ring: the money returns to its origin within a day, each hop forwarding 90-100%."
+    },
+    {
+      "id": "L-12",
+      "category": "circular",
+      "expected_verdict": "SUSPICIOUS",
+      "ledger_transaction_id": "CIRS-1-02",
+      "transaction": {
+        "amount": "5510.66",
+        "country": "Japan",
+        "sender": "Loop1-2",
+        "receiver": "Loop1-3"
+      },
+      "rule_reasons": [],
+      "behaviour_flags": [],
+      "note": "Leg of a four-account ring: the money returns to its origin within a day, each hop forwarding 90-100%."
+    },
+    {
+      "id": "L-13",
+      "category": "clean_large",
+      "expected_verdict": "CLEAR",
+      "ledger_transaction_id": "TXN-00140",
+      "transaction": {
+        "amount": "8162.13",
+        "country": "France",
+        "sender": "Fairline Travel",
+        "receiver": "Acme Logistics"
+      },
+      "rule_reasons": [
+        "Value 8,162.13 sits in the structuring band (8,000-10,000), just below the reporting threshold."
+      ],
+      "behaviour_flags": [],
+      "note": "Ordinary payment between two established businesses that happens to fall in the structuring band; the sender has no other payment in the band."
+    },
+    {
+      "id": "L-14",
+      "category": "clean_large",
+      "expected_verdict": "CLEAR",
+      "ledger_transaction_id": "TXN-00362",
+      "transaction": {
+        "amount": "10447.38",
+        "country": "Germany",
+        "sender": "Northwind Retail",
+        "receiver": "Granite Tools"
+      },
+      "rule_reasons": [
+        "Value 10,447.38 is at or above the 10,000 reporting threshold."
+      ],
+      "behaviour_flags": [],
+      "note": "Ordinary over-threshold payment between established businesses; the sender's other payments are varied and unremarkable."
+    },
+    {
+      "id": "L-15",
+      "category": "clean_large",
+      "expected_verdict": "CLEAR",
+      "ledger_transaction_id": "TXN-00295",
+      "transaction": {
+        "amount": "11807.58",
+        "country": "Australia",
+        "sender": "Granite Tools",
+        "receiver": "Corvus Media"
+      },
+      "rule_reasons": [
+        "Value 11,807.58 is at or above the 10,000 reporting threshold."
+      ],
+      "behaviour_flags": [],
+      "note": "Ordinary over-threshold payment between established businesses."
+    },
+    {
+      "id": "L-16",
+      "category": "clean_ordinary",
+      "expected_verdict": "CLEAR",
+      "ledger_transaction_id": "TXN-00212",
+      "transaction": {
+        "amount": "5366.55",
+        "country": "Australia",
+        "sender": "Corvus Media",
+        "receiver": "Delta Print Works"
+      },
+      "rule_reasons": [],
+      "behaviour_flags": [],
+      "note": "Ordinary supplier payment between established businesses; no forwarding chain."
+    },
+    {
+      "id": "L-17",
+      "category": "clean_ordinary",
+      "expected_verdict": "CLEAR",
+      "ledger_transaction_id": "TXN-00301",
+      "transaction": {
+        "amount": "3281.75",
+        "country": "Japan",
+        "sender": "Eastgate Supplies",
+        "receiver": "Granite Tools"
+      },
+      "rule_reasons": [],
+      "behaviour_flags": [],
+      "note": "Ordinary supplier payment between established businesses; no forwarding chain."
+    },
+    {
+      "id": "L-18",
+      "category": "clean_ordinary",
+      "expected_verdict": "CLEAR",
+      "ledger_transaction_id": "TXN-00030",
+      "transaction": {
+        "amount": "4113.57",
+        "country": "Australia",
+        "sender": "Northwind Retail",
+        "receiver": "Bluepeak Foods"
+      },
+      "rule_reasons": [],
+      "behaviour_flags": [],
+      "note": "Ordinary supplier payment between established businesses; no forwarding chain."
+    },
+    {
+      "id": "L-19",
+      "category": "clean_ordinary",
+      "expected_verdict": "CLEAR",
+      "ledger_transaction_id": "TXN-00173",
+      "transaction": {
+        "amount": "5003.28",
+        "country": "Canada",
+        "sender": "Fairline Travel",
+        "receiver": "Northwind Retail"
+      },
+      "rule_reasons": [],
+      "behaviour_flags": [],
+      "note": "Ordinary supplier payment between established businesses; no forwarding chain."
+    },
+    {
+      "id": "L-20",
+      "category": "clean_ordinary",
+      "expected_verdict": "CLEAR",
+      "ledger_transaction_id": "TXN-00281",
+      "transaction": {
+        "amount": "3254.47",
+        "country": "France",
+        "sender": "Acme Logistics",
+        "receiver": "Granite Tools"
+      },
+      "rule_reasons": [],
+      "behaviour_flags": [],
+      "note": "Ordinary supplier payment between established businesses; no forwarding chain."
+    }
+  ]
+}
