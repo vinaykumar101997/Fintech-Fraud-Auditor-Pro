@@ -568,7 +568,7 @@ def render_sar(df: pd.DataFrame, provider, batch_id: str):
 
     try:
         with st.spinner("Drafting..."):
-            structured = provider.llm.with_structured_output(SuspiciousActivityReport)
+            structured = provider.narrative_llm.with_structured_output(SuspiciousActivityReport)
             report = structured.invoke(
                 "Draft a suspicious activity report from the evidence below. "
                 "Use only facts present in the record.\n\n" + evidence

@@ -971,3 +971,69 @@ Over the 408 comparison reviews, 8 ran away (2.0%) and cost $2.23 of the $5.44 t
 - A cap on output or reasoning tokens is the first follow-up for both modes, on cost and latency grounds: about 2% of reviews spend up to 80 times the usual cost, most of them in review answers that call a built-in code tool instead of returning the verdict, and one case became ERROR that way.
 
 **Limits.** Two runs per arm; run-to-run differences of one or two cases are noise. The development case ids show the category (`OC-`, `ST-`, `HR-`, `PT-`, `PI-`...) to the model in both arms, as they did before this evaluation; the held-out (`H-`), no-rule (`N-`) and ledger-backed (`L-`) ids do not. The labels, the ledger rows and the agent share an author (see Disclosure). The ledger-backed cases are generator rows whose signals the history tool was written to describe. The instruction-text change made after the development run was not run live before the comparison. One provider and one model.
+
+## Follow-up: output limit on Vertex calls (17 November 2026)
+
+Added after the investigation agent evaluation above, which recommended a cap on output or reasoning tokens as the first follow-up. Nothing above has been changed; every figure in the sections above stands as published.
+
+### The change
+
+- `VERTEX_MAX_OUTPUT_TOKENS` (default 8192) limits each review and investigation call, reasoning tokens included. `VERTEX_NARRATIVE_MAX_OUTPUT_TOKENS` (default 32768) limits the SAR draft and chat answers, which run longer. `VERTEX_THINKING_BUDGET` sets a reasoning budget for review and investigation calls; it is unset by default, which keeps the model's own default. `VERTEX_TIMEOUT_SECONDS` (default 120) limits each request. All four apply to Vertex only; the Bedrock client is unchanged.
+- A Vertex reply whose finish reason is `MAX_TOKENS` raises a retryable error (`utils/llm_provider.py`). It goes through the shared retry wrapper like any transient failure, and when the retries are used up the review ends ERROR, never CLEAR.
+- The verdict call carries one tool, the verdict schema, and no built-in tool. There was nothing to switch off: the model names `google:python_interpreter` on its own, the reply is rejected because that name is not the verdict schema, and the rejected answer is retried.
+- `scripts/eval_llm_tier.py` now writes each model call's billed output tokens and finish reason into the per-case record and counts a reply cut off at the limit. SHA-256 with LF line endings: `04eb8153af8ed40f622d1003a59e9ab0daba4c93fb7802d0042ffe5221112bf3`. It differs from the frozen hash recorded above because of this addition; the frozen hash describes the runs above.
+
+### A cut-off reply could previously end CLEAR
+
+Before this change no output limit was set, so a cut-off reply was unlikely, but nothing read the finish reason. Replies were replayed offline through the installed `langchain-google-vertexai` 3.2.2 client, the output parser and the retry wrapper, with the transport replaced by a fake. Three kinds of cut-off reply ended CLEAR:
+
+1. The retrieval-grounded first call cut off with no text: the finding was replaced by "Retrieval returned no usable context." and the review went on to a verdict.
+2. The first call cut off mid-sentence: the partial finding was reviewed as if it were complete.
+3. A review reply holding a complete verdict but stopped at the limit: the verdict was used.
+
+In agent mode the investigation notes reach the review the same way, so the first two apply there too. All three now end ERROR in both modes, each covered by a test in `tests/test_llm_provider.py`. A cut-off reply with no verdict call, and a verdict with a required field missing, already ended ERROR and still do.
+
+### Choosing the limit (development set only)
+
+One run of the fixed review on the 31 development cases with the limit at 16384, so that no normal call could be cut off:
+
+| | Value |
+|---|---|
+| Model calls answered | 62, all with finish reason `STOP` |
+| Output tokens per call (billed, reasoning included) | median 1,285, 95th percentile 2,034, largest 2,535 (a first call; largest review call 1,362) |
+| Verdict accuracy, SUSPICIOUS recall, clean cleared | 28/31, 16/18, 12/13 |
+| Reviews that errored | 0 |
+| Seconds per case, mean / p95 | 27.8 / 58.0 |
+| Cost | $0.2060 ($0.0066 per case) |
+
+The rule fixed before the run: at least twice the largest normal call, rounded up to a power of two. 2 × 2,535 = 5,070, so the default is **8192**. One call in this run (the OT-05 review) failed at the 120-second request timeout and succeeded on retry; the case took 187.8 s. What that timed-out call was billed is not known.
+
+### Known runaway cases, before and after
+
+Before: the records of the runs above (no limit). After: the limit at 8192, the fixed review five times on OT-05 and PT-01, and once each for the other cases in the arm where they ran away. Cost is at $0.30 and $2.50 per million input and output tokens, reasoning counted as output. "Rejected" counts review answers that named the built-in code tool and were retried.
+
+| Arm | Case | Before: output tokens, cost, seconds, verdict | After: output tokens, cost, seconds, verdict | Rejected (after) |
+|---|---|---|---|---|
+| Fixed | OT-05 | 68,018, $0.1709, 210.5 s, CLEAR (correct); 264,012, $0.6614, 869.4 s, ERROR | 10,705, $0.0277, 60.3 s, CLEAR; 2,495, $0.0069, 25.7 s, CLEAR; 2,795, $0.0077, 26.8 s, CLEAR; 2,436, $0.0068, 23.3 s, CLEAR | 1, 0, 0, 0 |
+| Fixed | PT-01 | 64,505, $0.1619, 194.2 s, CLEAR (wrong); 3,505, $0.0094, 24.3 s, CLEAR (wrong) | 2,220, $0.0062, 20.5 s, CLEAR (wrong); 34,941, $0.0887, 167.5 s, ERROR; 34,941, $0.0887, 163.6 s, ERROR; 2,106, $0.0059, 19.3 s, CLEAR (wrong) | 0, 4, 4, 0 |
+| Agent | PT-01 | 66,756, $0.1687, 244.0 s, CLEAR (wrong); 1,901, $0.0070, 24.0 s, CLEAR (wrong) | 2,000, $0.0073, 23.9 s, CLEAR (wrong) | 0 |
+| Agent (development run) | OT-06 | 68,549, $0.1738, 238.5 s, CLEAR | 2,010, $0.0071, 26.4 s, CLEAR | 0 |
+| Agent | H-03 | 132,615, $0.3335, 460.2 s, CLEAR; 1,773, $0.0058, 17.8 s, CLEAR | 1,499, $0.0051, 19.5 s, CLEAR | 0 |
+| Agent | H-04 | 1,778, $0.0062, 19.8 s, CLEAR; 198,549, $0.4991, 742.2 s, CLEAR | 1,904, $0.0065, 22.0 s, CLEAR | 0 |
+| Agent, ledger | L-14 | 69,383, $0.1781, 406.5 s, CLEAR; 3,655, $0.0118, 30.0 s, CLEAR | 3,347, $0.0122, 38.0 s, CLEAR | 0 |
+| `fixed+history`, ledger | L-16 | 20,302, $0.0519, 83.9 s, CLEAR; 4,048, $0.0113, 26.1 s, CLEAR | 3,082, $0.0089, 29.7 s, CLEAR | 0 |
+
+The fifth fixed repeat is left out of the table: the network connection was lost during it. OT-05 had one rejected answer and then three connection failures (ERROR); PT-01 never reached the model (ERROR). Its elapsed time covers the outage and is not a model figure.
+
+What the limit did:
+
+- Every rejected answer was billed 8,183 output tokens, against up to about 65,500 before. The worst case went from 264,012 tokens, $0.6614 and 869 s (OT-05 before) to 34,941 tokens, $0.0887 and 168 s (PT-01 after, four rejected answers).
+- **No call reported `MAX_TOKENS`.** The rejected answers stopped at the limit but came back with finish reason `STOP`. They end ERROR because the parser rejects the tool name, not because of the new check. Over all the calls measured in this follow-up the check never fired, so its live behaviour is shown only by the offline tests.
+- PT-01 (expected SUSPICIOUS) was cleared in two fixed repeats and ended ERROR in the other two. Before, it was cleared in both fixed runs, once after a 64,505-token answer. ERROR is never counted as cleared and goes to manual review, so this is a wrong CLEAR turned into an error, not a new miss.
+- In the agent and `fixed+history` arms no case ran away in one run each. Before, each of these cases ran away in one of its two runs, so one clean run is weak evidence.
+
+### Limits
+
+One run of the development set and few repeats of the known cases, on one model. A finish reason of `MAX_TOKENS` was never observed live, so how Vertex reports a cut-off verdict call is not known. Whether reasoning tokens count against the limit was not measured directly; the rejected answers stopping at 8,183 billed tokens (reasoning included) under a limit of 8,192 is consistent with it. The SAR draft and chat limit was not run live. Total live spend for this follow-up: $0.52 ($0.21 for the development run, $0.31 for the known cases).
+
+A second check was added afterwards because of the finding above: capped replies were billed 8,183 of 8,192 output tokens yet reported finish reason `STOP`, so the `MAX_TOKENS` check alone would not catch them. A reply whose output tokens in the usage metadata (reasoning included) reach 99% of its model's limit (8,111 of 8,192 for review and investigation calls, 32,441 of 32,768 for the SAR draft and chat) now raises the same retryable error, and the review ends ERROR, never CLEAR, in both modes. Those rejected answers already ended ERROR through the parser; the new check covers a capped reply that would parse. It is shown only by offline tests in `tests/test_llm_provider.py`, with no live calls. Not verified live: a capped reply holding plain text rather than a tool call (a cut-off finding or a cut-off text answer), or a capped reply holding a complete verdict, was never observed, so how its usage is reported is assumed to match the rejected answers.

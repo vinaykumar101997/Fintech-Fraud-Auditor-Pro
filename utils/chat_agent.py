@@ -20,7 +20,7 @@ from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 
 import config
-from utils.llm_provider import ProviderConfigError, get_models
+from utils.llm_provider import ProviderConfigError, get_models, get_narrative_model
 from utils.rag_chain import build_analysis_chain
 
 logger = logging.getLogger(__name__)
@@ -53,6 +53,7 @@ class ComplianceIntelligenceProvider:
 
         try:
             self.llm, self.embeddings = get_models()
+            self.narrative_llm = get_narrative_model(self.llm)
             self.client = QdrantClient(url=config.QDRANT_URL, api_key=config.QDRANT_API_KEY)
             self.vector_store = QdrantVectorStore(
                 client=self.client,
@@ -63,6 +64,8 @@ class ComplianceIntelligenceProvider:
             # Shared by the fixed review's chain and the agent's guidance search.
             self.retriever = self.vector_store.as_retriever(search_kwargs={"k": config.RETRIEVER_K})
             self.engine = build_analysis_chain(self.llm, self.retriever)
+            # Chat answers run longer than a review finding.
+            self.chat_engine = build_analysis_chain(self.narrative_llm, self.retriever)
         except ProviderConfigError as exc:
             logger.error("Model provider misconfigured: %s", exc)
             raise ProviderUnavailable(str(exc)) from exc
@@ -95,7 +98,7 @@ class ComplianceIntelligenceProvider:
     def query(self, user_input: str) -> str:
         """Grounded query against the compliance corpus."""
         try:
-            response = self.engine.invoke({"query": user_input})
+            response = self.chat_engine.invoke({"query": user_input})
             return (response or {}).get("result", "No definitive compliance data found.")
         except Exception as exc:
             logger.error("Query execution error: %s", exc)

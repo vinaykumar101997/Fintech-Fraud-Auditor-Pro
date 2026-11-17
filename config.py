@@ -68,6 +68,28 @@ GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
 GCP_LOCATION = os.getenv("GCP_LOCATION", "us-central1")
 VERTEX_CHAT_MODEL = os.getenv("VERTEX_CHAT_MODEL", "gemini-2.5-flash")
 VERTEX_EMBED_MODEL = os.getenv("VERTEX_EMBED_MODEL", "text-embedding-004")
+# Output token limit per call, reasoning tokens included. Left unset, Gemini
+# may spend its full 65,535-token allowance on one answer. A reply cut off at
+# the limit raises and is retried; it is never used (utils/llm_provider.py).
+# The first limit covers the review and investigation calls, the second the
+# SAR draft and chat answers, which are longer. 8192 is twice the largest
+# normal call measured on the development set (2,535 output tokens), rounded
+# up to a power of two; see docs/EVALUATION.md.
+VERTEX_MAX_OUTPUT_TOKENS = int(os.getenv("VERTEX_MAX_OUTPUT_TOKENS", "8192"))
+VERTEX_NARRATIVE_MAX_OUTPUT_TOKENS = int(os.getenv("VERTEX_NARRATIVE_MAX_OUTPUT_TOKENS", "32768"))
+for _name in ("VERTEX_MAX_OUTPUT_TOKENS", "VERTEX_NARRATIVE_MAX_OUTPUT_TOKENS"):
+    if not 1024 <= globals()[_name] <= 65535:
+        raise ValueError(f"{_name}={globals()[_name]} must be between 1024 and 65535")
+# Reasoning token budget for the review and investigation calls. Unset leaves
+# the model's own default; 0 turns reasoning off, -1 lets the model decide.
+_budget = os.getenv("VERTEX_THINKING_BUDGET", "").strip()
+VERTEX_THINKING_BUDGET = int(_budget) if _budget else None
+if VERTEX_THINKING_BUDGET is not None and VERTEX_THINKING_BUDGET < -1:
+    raise ValueError(f"VERTEX_THINKING_BUDGET={VERTEX_THINKING_BUDGET} must be -1 or more")
+# Seconds one chat request may take before it fails (and is retried).
+VERTEX_TIMEOUT_SECONDS = float(os.getenv("VERTEX_TIMEOUT_SECONDS", "120"))
+if VERTEX_TIMEOUT_SECONDS <= 0:
+    raise ValueError(f"VERTEX_TIMEOUT_SECONDS={VERTEX_TIMEOUT_SECONDS} must be above 0")
 
 # --- Shared inference settings ---
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.0"))

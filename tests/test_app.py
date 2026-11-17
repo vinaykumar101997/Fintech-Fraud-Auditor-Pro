@@ -60,7 +60,7 @@ class FakeProvider:
     instances = []
 
     def __init__(self):
-        self.llm = FakeLLM()
+        self.llm = self.narrative_llm = FakeLLM()
         FakeProvider.instances.append(self)
 
     def health(self):
