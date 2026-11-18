@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "eventId": "3e2b1a0f-9d8c-4f6a-8b5c-4d3e2f1a0b9c",
+  "paymentId": "PAY-20261015-0001",
+  "verdict": "ERROR",
+  "reasons": ["watch-list source unavailable"],
+  "decidedAt": "2026-10-15T09:30:02Z",
+  "screeningRunId": "run-2026-10-15-0042"
+}

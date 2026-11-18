@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "eventId": "6f1c2a9e-3b4d-4c5e-8f60-1a2b3c4d5e6f",
+  "paymentId": "PAY-20261015-0001",
+  "fromAccount": "ACC-1001",
+  "toAccount": "ACC-1002",
+  "amount": "125.50",
+  "currency": "USD",
+  "createdAt": "2026-10-15T09:30:00.123456Z",
+  "fromAccountHolderName": "Alice Example",
+  "fromAccountCountry": "US",
+  "toAccountHolderName": "Bob Example",
+  "toAccountCountry": "GB"
+}

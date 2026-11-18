@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:payment-event-service:contracts:payment.screening.completed.v1",
+  "title": "payment.screening.completed v1",
+  "description": "Published by the screening service on topic payment.screening.completed with its verdict for one payment.screening.requested event. Message key: paymentId. An event that does not validate against this schema is sent to payment.screening.completed.DLT and never applied.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "eventId", "paymentId", "verdict", "reasons", "decidedAt", "screeningRunId"],
+  "properties": {
+    "schemaVersion": {
+      "description": "Contract version. Always 1 for this schema.",
+      "const": 1
+    },
+    "eventId": {
+      "description": "Unique id of this verdict event (UUID). Redelivering it is harmless: (paymentId, eventId) is applied at most once.",
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    },
+    "paymentId": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "verdict": {
+      "description": "CLEAR releases the payment for processing; REJECT rejects it; FLAG (needs an officer) and ERROR (screening could not decide) leave it HELD.",
+      "enum": ["CLEAR", "FLAG", "REJECT", "ERROR"]
+    },
+    "reasons": {
+      "description": "Human-readable reasons for the verdict. May be empty.",
+      "type": "array",
+      "maxItems": 10,
+      "items": { "type": "string", "maxLength": 500 }
+    },
+    "riskScore": {
+      "description": "Optional score from the screening model. Recorded, never used to decide anything here.",
+      "type": "number"
+    },
+    "decidedAt": {
+      "description": "When the screening service decided (RFC 3339, UTC).",
+      "type": "string",
+      "format": "date-time"
+    },
+    "screeningRunId": {
+      "description": "Identifier of the screening run that produced the verdict, for tracing on the screening side.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    }
+  }
+}
