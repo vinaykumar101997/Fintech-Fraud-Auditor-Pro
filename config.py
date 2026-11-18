@@ -265,3 +265,8 @@ SCREENING_RULE_CURRENCY = os.getenv("SCREENING_RULE_CURRENCY", "USD").strip().up
 if not (len(SCREENING_RULE_CURRENCY) == 3 and SCREENING_RULE_CURRENCY.isascii()
         and SCREENING_RULE_CURRENCY.isalpha()):
     raise ValueError(f"SCREENING_RULE_CURRENCY={SCREENING_RULE_CURRENCY!r} must be an ISO 4217 code")
+# Estimated model spend in USD after which the worker stops polling. Unset or 0: no limit.
+_max_cost = os.getenv("SCREENING_MAX_COST_USD", "").strip()
+SCREENING_MAX_COST_USD = float(_max_cost) if _max_cost else 0.0
+if not 0 <= SCREENING_MAX_COST_USD < float("inf"):  # also rejects NaN
+    raise ValueError(f"SCREENING_MAX_COST_USD={_max_cost!r} must be 0 or a positive number")

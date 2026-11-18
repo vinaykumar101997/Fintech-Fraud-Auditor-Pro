@@ -199,6 +199,9 @@ Settings (environment or `.env`):
 | `SCREENING_GROUP_ID` | `fraud-auditor-screening` | consumer group |
 | `SCREENING_DEADLINE_SECONDS` | `300` | a review still running after this is answered with ERROR |
 | `SCREENING_RULE_CURRENCY` | `USD` | the currency `REPORTING_THRESHOLD` and `STRUCTURING_FLOOR` are written in |
+| `SCREENING_MAX_COST_USD` | unset (no limit) | estimated model spend after which the worker stops polling. It finishes and commits the current request first, then logs `cost_limit_reached` and exits. |
+
+**Cost figures are estimates.** Each review's tokens and estimated cost appear in its log line and audit row as `tokens_in`, `tokens_out` and `cost_usd`. A review skipped by a sanctions or jurisdiction hit logs 0. Prices come from the table in `scripts/eval_llm_tier.py`, and `cost_usd` is empty when the model has no price there. Embedding calls are not counted, and neither are replies cut off at the output limit (those are raised, not returned). Toward the limit, a review whose usage or price is unknown counts as 0.09 USD, the costliest single review measured. The provider's billing console is the exact total.
 
 The worker also uses the model provider settings, `QDRANT_URL` and `AUDIT_DB_PATH` described above. It requires `REVIEW_MODE=fixed` and a real `data/sanctions_list.csv`, and it does not start without either. One request is screened at a time.
 
