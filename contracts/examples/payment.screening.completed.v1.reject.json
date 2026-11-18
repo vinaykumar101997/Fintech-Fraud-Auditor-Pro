@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "eventId": "2d1a0f9e-8c7b-4e5f-9a4b-3c2d1e0f9a8b",
+  "paymentId": "PAY-20261015-0001",
+  "verdict": "REJECT",
+  "reasons": ["counterparty on sanctions list"],
+  "riskScore": 0.98,
+  "decidedAt": "2026-10-15T09:30:02Z",
+  "screeningRunId": "run-2026-10-15-0042"
+}

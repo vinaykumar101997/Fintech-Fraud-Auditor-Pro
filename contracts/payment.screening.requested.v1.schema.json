@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:payment-event-service:contracts:payment.screening.requested.v1",
+  "title": "payment.screening.requested v1",
+  "description": "Published by payment-event-service on topic payment.screening.requested when a payment is created with screening enabled. The payment stays HELD until a payment.screening.completed verdict or an officer decision. Message key: paymentId.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "eventId", "paymentId", "fromAccount", "toAccount", "amount", "currency", "createdAt"],
+  "properties": {
+    "schemaVersion": {
+      "description": "Contract version. Always 1 for this schema; a breaking change gets a new file and number.",
+      "const": 1
+    },
+    "eventId": {
+      "description": "Unique id of this event (UUID). A redelivery of the same event has the same eventId.",
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    },
+    "paymentId": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "fromAccount": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "toAccount": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "amount": {
+      "description": "Positive decimal as a string, so no precision is lost in transit (e.g. \"125.50\").",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,16})([.][0-9]{1,2})?$",
+      "not": { "pattern": "^0([.]0{1,2})?$" }
+    },
+    "currency": {
+      "description": "ISO 4217 alphabetic code.",
+      "type": "string",
+      "pattern": "^[A-Z]{3}$"
+    },
+    "createdAt": {
+      "description": "When the payment was created (RFC 3339, UTC).",
+      "type": "string",
+      "format": "date-time"
+    },
+    "fromAccountHolderName": {
+      "description": "Optional. Name of the holder of fromAccount; left out when the service has none.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 140
+    },
+    "fromAccountCountry": {
+      "description": "Optional. Country of fromAccount, ISO 3166-1 alpha-2 (e.g. \"US\").",
+      "type": "string",
+      "pattern": "^[A-Z]{2}$"
+    },
+    "toAccountHolderName": {
+      "description": "Optional. Name of the holder of toAccount; left out when the service has none.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 140
+    },
+    "toAccountCountry": {
+      "description": "Optional. Country of toAccount, ISO 3166-1 alpha-2 (e.g. \"GB\").",
+      "type": "string",
+      "pattern": "^[A-Z]{2}$"
+    }
+  }
+}

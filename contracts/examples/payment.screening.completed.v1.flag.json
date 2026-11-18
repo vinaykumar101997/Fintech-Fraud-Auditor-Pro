@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "eventId": "1c0f9e8d-7b6a-4d4e-8f3a-2b1c0d9e8f7a",
+  "paymentId": "PAY-20261015-0001",
+  "verdict": "FLAG",
+  "reasons": ["counterparty name close to a watch-list entry"],
+  "riskScore": 0.71,
+  "decidedAt": "2026-10-15T09:30:02Z",
+  "screeningRunId": "run-2026-10-15-0042"
+}

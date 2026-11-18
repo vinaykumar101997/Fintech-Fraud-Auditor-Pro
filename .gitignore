@@ -34,3 +34,7 @@ docs/INTERVIEW_PREP.md
 data/*.jsonl
 data/*.md
 data/agent_eval/
+
+# vendored payment contracts are tracked
+!contracts/*.json
+!contracts/examples/*.json
