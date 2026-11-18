@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from jsonschema import Draft202012Validator, FormatChecker
+from langchain_core.callbacks import get_usage_metadata_callback
 
 import config
 from utils import audit_log
@@ -47,7 +48,7 @@ from utils.rule_ids import rule_id, rule_ids
 from utils.rules import evaluate_row
 from utils.sanitize import scrub
 from utils.screening import load_watchlist, normalize_name, rule_screener
-from utils.trace import digest
+from utils.trace import billed_tokens, digest
 from utils.verdicts import AuditOutcome, Verdict
 
 logger = logging.getLogger("screening_worker")
@@ -61,6 +62,10 @@ AUDIT_EVENT = "screening_verdict"
 MAX_REASONS = 10
 BACKOFF_CAP_SECONDS = 30.0
 SUMMARY_EVERY = 50
+# Charged against SCREENING_MAX_COST_USD for a review whose usage or price is unknown: the
+# costliest single fixed review measured with the output limit on (docs/EVALUATION.md).
+UNKNOWN_REVIEW_COST_USD = 0.09
+NO_REVIEW_COST = {"tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0}
 
 # --- contracts ---------------------------------------------------------------
 _RFC3339 = re.compile(r"^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$")
@@ -151,27 +156,55 @@ def cap_reasons(reasons: List[str]) -> List[str]:
     return cleaned[:keep] + [f"{len(cleaned) - keep} more reason(s) omitted."]
 
 
-def run_with_deadline(fn: Callable[[], AuditOutcome], seconds: float) -> AuditOutcome:
-    """fn() in a daemon thread; ERROR if it raises or is still running after `seconds`.
+def run_with_deadline(fn: Callable[[], AuditOutcome],
+                      seconds: float) -> Tuple[AuditOutcome, Optional[Dict[str, Any]]]:
+    """(outcome, token usage by model) of fn() run in a daemon thread.
 
+    ERROR if fn raises or is still running after `seconds`; usage is None then.
     shortcut: an overrun review keeps running in the background and can briefly
     double model concurrency; move to a cancellable call if quota errors appear.
     """
-    box: Dict[str, AuditOutcome] = {}
+    box: Dict[str, Any] = {}
 
     def target() -> None:
-        try:
-            box["outcome"] = fn()
-        except Exception as exc:  # noqa: BLE001
-            box["outcome"] = AuditOutcome.failure(type(exc).__name__)
+        # Inside the thread: a new thread does not inherit the caller's callback context.
+        with get_usage_metadata_callback() as meter:
+            try:
+                outcome = fn()
+            except Exception as exc:  # noqa: BLE001
+                outcome = AuditOutcome.failure(type(exc).__name__)
+        box["usage"] = dict(meter.usage_metadata)
+        box["outcome"] = outcome  # last, so a finished review always carries its usage
 
     thread = threading.Thread(target=target, name="screening-review", daemon=True)
     thread.start()
     thread.join(seconds)
     if "outcome" in box:
-        return box["outcome"]
+        return box["outcome"], box["usage"]
     overrun = f"Review did not finish within {seconds:g} s. Manual review required."
-    return AuditOutcome(verdict=Verdict.ERROR, rationale=overrun, error_detail=overrun)
+    return AuditOutcome(verdict=Verdict.ERROR, rationale=overrun, error_detail=overrun), None
+
+
+def review_cost(usage: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Billed tokens and USD cost of one review; cost_usd is None when usage or a price is unknown.
+
+    Prices come from the evaluation harness's table. Embedding calls and replies cut
+    off at the output limit (raised, not returned) are not counted.
+    """
+    from scripts.eval_llm_tier import PRICES_PER_MILLION
+
+    tokens_in = tokens_out = 0
+    cost: Optional[float] = 0.0 if usage else None
+    for model, metadata in (usage or {}).items():
+        used_in, used_out = billed_tokens(metadata)
+        tokens_in, tokens_out = tokens_in + used_in, tokens_out + used_out
+        prices = PRICES_PER_MILLION.get(model)
+        if prices is None or cost is None:
+            cost = None
+        else:
+            cost += (used_in * prices[0] + used_out * prices[1]) / 1e6
+    return {"tokens_in": tokens_in, "tokens_out": tokens_out,
+            "cost_usd": None if cost is None else round(cost, 6)}
 
 
 def decide(request: dict, review: Callable[..., AuditOutcome],
@@ -228,20 +261,20 @@ def decide(request: dict, review: Callable[..., AuditOutcome],
                     f"{config.SCREENING_RULE_CURRENCY}.")
 
     facts: Dict[str, Any] = {"rule_ids": rule_ids(reasons), "reviewed": False, "model_s": None,
-                             "rationale": None}
+                             "rationale": None, **NO_REVIEW_COST}
     # Decided on structured results, never on reason text: a reason can carry request text.
     risky = config.HIGH_RISK_COUNTRIES | config.SECRECY_JURISDICTIONS
     if main.sanctions_hits or any(resolve_country(c) in risky for c in (from_country, to_country) if c):
         return "FLAG", reasons + gaps, facts
 
     started = time.perf_counter()
-    outcome = run_with_deadline(lambda: review(
+    outcome, usage = run_with_deadline(lambda: review(
         transaction_id=request["eventId"], amount=amount, country=to_country,
         sender=from_acct, receiver=to_acct, rule_reasons=reasons,
         behaviour_signals={"currency": currency},
     ), deadline)
     facts.update(reviewed=True, model_s=round(time.perf_counter() - started, 3),
-                 rationale=outcome.rationale)
+                 rationale=outcome.rationale, **review_cost(usage))
 
     if outcome.verdict == Verdict.ERROR:
         return "ERROR", reasons + gaps + [outcome.rationale], facts
@@ -290,9 +323,12 @@ class Worker:
 
     def __init__(self, consumer: Any, producer: Any, review: Callable[..., AuditOutcome], *,
                  run_id: str, deadline: float, db_path: Optional[Path] = None,
-                 sleep: Callable[[float], None] = time.sleep):
+                 sleep: Callable[[float], None] = time.sleep,
+                 max_cost_usd: Optional[float] = None):
         self.consumer, self.producer, self.review = consumer, producer, review
         self.run_id, self.deadline, self.db_path, self.sleep = run_id, deadline, db_path, sleep
+        self.max_cost_usd = config.SCREENING_MAX_COST_USD if max_cost_usd is None else max_cost_usd
+        self.spent_usd = 0.0
         self.stopping = False
         self.counts: Counter = Counter()
         self.e2e_ms: List[float] = []
@@ -368,12 +404,22 @@ class Worker:
         self.counts[line["verdict"]] += 1
         self.counts["deduped" if line.get("deduped") else "decided"] += 1
         logger.info(json.dumps({**line, "outcome": "published"}))
+        if line.get("reviewed"):  # replays and skipped reviews cost nothing
+            cost = line["cost_usd"]
+            self.spent_usd += UNKNOWN_REVIEW_COST_USD if cost is None else cost
+        if self.max_cost_usd and self.spent_usd >= self.max_cost_usd and not self.stopping:
+            # This message is already published and committed; polling stops here.
+            logger.warning(json.dumps({"event": "cost_limit_reached",
+                                       "spent_usd": round(self.spent_usd, 6),
+                                       "limit_usd": self.max_cost_usd}))
+            self.stopping = True
         if sum(self.counts[v] for v in ("CLEAR", "FLAG", "ERROR")) % SUMMARY_EVERY == 0:
             self.summary()
 
     def decide_and_record(self, data: Optional[dict], problem: Optional[str], payment_id: str,
                           seed: str, line: Dict[str, Any], evidence: Dict[str, Any]) -> bytes:
-        facts: Dict[str, Any] = {"rule_ids": [], "reviewed": False, "model_s": None, "rationale": None}
+        facts: Dict[str, Any] = {"rule_ids": [], "reviewed": False, "model_s": None, "rationale": None,
+                                 **NO_REVIEW_COST}
         if problem is not None:
             verdict, reasons = "ERROR", [f"Invalid screening request: {problem}."]
             line["problem"] = problem
@@ -395,8 +441,9 @@ class Worker:
             self.e2e_ms.append(e2e_ms)
         if facts["model_s"] is not None:
             self.model_s.append(facts["model_s"])
+        cost = {k: facts[k] for k in NO_REVIEW_COST}
         line.update(rule_ids=facts["rule_ids"], reviewed=facts["reviewed"],
-                    model_s=facts["model_s"], e2e_ms=e2e_ms)
+                    model_s=facts["model_s"], e2e_ms=e2e_ms, **cost)
 
         # Raises AuditWriteError: nothing is published or committed, so the request comes back.
         audit_log.record(
@@ -407,7 +454,7 @@ class Worker:
             evidence=evidence,  # stored as evidence_hash, compared on replay
             detail=json.dumps({"published": value.decode("utf-8"),
                                "created_at": created, "model_s": facts["model_s"],
-                               "e2e_ms": e2e_ms}),
+                               "e2e_ms": e2e_ms, **cost}),
             db_path=self.db_path,
         )
         return value
@@ -459,6 +506,7 @@ class Worker:
             return {"p50": round(statistics.median(values), 3), "p95": round(q[18], 3)}
 
         logger.info(json.dumps({"event": "summary", "counts": dict(self.counts),
+                                "spent_usd": round(self.spent_usd, 6),
                                 "e2e_ms": pct(self.e2e_ms), "model_s": pct(self.model_s)}))
 
 

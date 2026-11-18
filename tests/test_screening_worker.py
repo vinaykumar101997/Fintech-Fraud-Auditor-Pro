@@ -111,6 +111,32 @@ class Review:
         return AuditOutcome(verdict=self.verdict, rationale=self.rationale, confidence=0.9)
 
 
+class MeteredReview(Review):
+    """Makes two chat-model calls that report usage, as the retrieval step and the review do."""
+
+    def __init__(self, model_name, **kwargs):
+        super().__init__(**kwargs)
+        self.model_name = model_name
+
+    def __call__(self, **kwargs):
+        from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+        from langchain_core.messages import AIMessage
+
+        # Billed output is total minus input (reasoning tokens): 500 per call.
+        usage = {"input_tokens": 1000, "output_tokens": 200, "total_tokens": 1500}
+        reply = AIMessage(content="ok", usage_metadata=usage,
+                          response_metadata={"model_name": self.model_name})
+        model = GenericFakeChatModel(messages=iter([reply, reply]))
+        model.invoke("first call")
+        model.invoke("second call")
+        return super().__call__(**kwargs)
+
+
+def screened_lines(caplog):
+    return [json.loads(r.getMessage()) for r in caplog.records
+            if r.getMessage().startswith('{"event": "screened"')]
+
+
 @pytest.fixture(autouse=True)
 def fake_screener(monkeypatch):
     monkeypatch.setattr(sw, "rule_screener",
@@ -138,11 +164,12 @@ def message(body, key=SAME, offset=0):
                        offset=offset)
 
 
-def run(items, review, db, producer=None, consumer=None, deadline=5.0, sleep=lambda s: None):
+def run(items, review, db, producer=None, consumer=None, deadline=5.0, sleep=lambda s: None,
+        **options):
     consumer = consumer or FakeConsumer(items)
     producer = producer or FakeProducer()
     worker = sw.Worker(consumer, producer, review, run_id="run-test", deadline=deadline,
-                       db_path=db, sleep=sleep)
+                       db_path=db, sleep=sleep, **options)
     worker.run(max_polls=len(items))
     return worker, consumer, producer
 
@@ -491,6 +518,54 @@ def test_log_line_is_one_json_object_per_message(db, caplog):
     assert screened[0]["verdict"] == "CLEAR" and screened[0]["reviewed"] is True
     assert screened[0]["e2e_ms"] is not None and screened[0]["model_s"] is not None
     assert any(line["event"] == "summary" for line in lines)
+
+
+# --- cost and token logging ----------------------------------------------------
+def test_review_usage_is_recorded_in_the_log_line_and_audit_detail(db, caplog):
+    from scripts.eval_llm_tier import PRICES_PER_MILLION
+
+    caplog.set_level(logging.INFO, logger="screening_worker")
+    body = request()
+    run([message(body)], MeteredReview("gemini-2.5-flash"), db)
+
+    price_in, price_out = PRICES_PER_MILLION["gemini-2.5-flash"]
+    expected = {"tokens_in": 2000, "tokens_out": 1000,
+                "cost_usd": round((2000 * price_in + 1000 * price_out) / 1e6, 6)}
+    [row] = [r for r in audit_log.history(body["paymentId"], db_path=db)
+             if r["stage"] == sw.AUDIT_EVENT]
+    detail = json.loads(row["detail"])
+    assert {k: detail[k] for k in expected} == expected
+    [line] = screened_lines(caplog)
+    assert {k: line[k] for k in expected} == expected
+
+
+def test_cost_limit_stops_polling_after_committing_the_current_message(db, caplog):
+    caplog.set_level(logging.INFO, logger="screening_worker")
+    items = [message(request(), offset=0),
+             message(request(eventId=str(sw.uuid.uuid4()), paymentId="PAY-2"), offset=1)]
+    # Review() reports no usage, so it is charged the fallback cost, above this limit.
+    worker, consumer, producer = run(items, Review(), db, max_cost_usd=0.05)
+    assert len(producer.sent) == 1 and consumer.commits == [0]
+    assert len(consumer.items) == 1  # the second message was never polled
+    assert worker.spent_usd == sw.UNKNOWN_REVIEW_COST_USD
+    stops = [json.loads(r.getMessage()) for r in caplog.records
+             if '"cost_limit_reached"' in r.getMessage()]
+    assert len(stops) == 1 and stops[0]["limit_usd"] == 0.05
+
+
+def test_unknown_usage_counts_as_the_fallback_and_a_skipped_review_as_zero(db, caplog):
+    caplog.set_level(logging.INFO, logger="screening_worker")
+    items = [message(request(toAccountCountry="RU"), offset=0),  # high-risk: no review
+             message(request(eventId=str(sw.uuid.uuid4()), paymentId="PAY-2"), offset=1)]
+    worker, _, _ = run(items, MeteredReview("model-without-a-price"), db)
+    skipped, unpriced = screened_lines(caplog)
+    assert {k: skipped[k] for k in sw.NO_REVIEW_COST} == sw.NO_REVIEW_COST
+    assert unpriced["tokens_in"] == 2000 and unpriced["cost_usd"] is None
+    assert worker.spent_usd == sw.UNKNOWN_REVIEW_COST_USD
+
+    no_usage, _, _ = run([message(request(eventId=str(sw.uuid.uuid4()), paymentId="PAY-3"))],
+                         Review(), db)
+    assert no_usage.spent_usd == sw.UNKNOWN_REVIEW_COST_USD
 
 
 # --- verdict construction ------------------------------------------------------
