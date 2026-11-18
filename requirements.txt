@@ -50,6 +50,10 @@ pydantic==2.13.2
 rapidfuzz==3.6.1
 pycountry==26.2.16   # ISO 3166 country codes for the jurisdiction rules
 
+# --- Screening worker (screening_worker.py) ---
+confluent-kafka==2.16.1   # Kafka client; binary wheels for Windows and Linux
+jsonschema==4.26.0        # validates requests and verdicts against contracts/
+
 # --- Development ---
 pytest==8.3.4
 

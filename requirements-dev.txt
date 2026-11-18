@@ -23,4 +23,7 @@ rapidfuzz==3.6.1
 pycountry==26.2.16
 langchain-core==1.6.3
 pydantic==2.13.2
+# tests/test_screening_worker.py validates against contracts/; the Kafka client
+# itself is not needed, because the tests pass fake clients.
+jsonschema==4.26.0
 pytest==8.3.4

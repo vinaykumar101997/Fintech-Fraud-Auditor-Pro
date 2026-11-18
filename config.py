@@ -250,3 +250,18 @@ AGENT_TOOL_RESULT_CHARS = int(os.getenv("AGENT_TOOL_RESULT_CHARS", "9000"))
 # fixed mode (LLM_MAX_WORKERS) to stay inside per-minute quotas.
 AGENT_MAX_WORKERS = int(os.getenv("AGENT_MAX_WORKERS", "1"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+
+# --- Screening worker (screening_worker.py) ---
+SCREENING_BOOTSTRAP_SERVERS = os.getenv("SCREENING_BOOTSTRAP_SERVERS", "localhost:9094")
+SCREENING_GROUP_ID = os.getenv("SCREENING_GROUP_ID", "fraud-auditor-screening")
+# A review still running after this many seconds is answered with ERROR. The
+# slowest fixed review measured took over 240 s (docs/EVALUATION.md).
+SCREENING_DEADLINE_SECONDS = float(os.getenv("SCREENING_DEADLINE_SECONDS", "300"))
+if SCREENING_DEADLINE_SECONDS <= 0:
+    raise ValueError(f"SCREENING_DEADLINE_SECONDS={SCREENING_DEADLINE_SECONDS} must be above 0")
+# The currency REPORTING_THRESHOLD and STRUCTURING_FLOOR are written in. A
+# payment in any other currency skips the amount rules and cannot be cleared.
+SCREENING_RULE_CURRENCY = os.getenv("SCREENING_RULE_CURRENCY", "USD").strip().upper()
+if not (len(SCREENING_RULE_CURRENCY) == 3 and SCREENING_RULE_CURRENCY.isascii()
+        and SCREENING_RULE_CURRENCY.isalpha()):
+    raise ValueError(f"SCREENING_RULE_CURRENCY={SCREENING_RULE_CURRENCY!r} must be an ISO 4217 code")
