@@ -161,6 +161,49 @@ Optional: index an AML guidance PDF for the AI review tier:
 python scripts/ingest_pdf.py --file path/to/aml_guidelines.pdf
 ```
 
+## Screening worker
+
+`screening_worker.py` screens payments for [payment-event-service](https://github.com/vinaykumar101997/payment-event-service). It reads `payment.screening.requested` and publishes one verdict per request to `payment.screening.completed`. Both topics are keyed by `paymentId`. Both message formats are the JSON Schemas vendored in [`contracts/`](contracts/SOURCE.md), and every request and every verdict is validated against them.
+
+```bash
+pip install -r requirements.txt
+python -m screening_worker
+```
+
+| Verdict | When | Payment |
+|---|---|---|
+| `FLAG` | sanctions match, or a high-risk or secrecy jurisdiction on either side (decided by the rules, no model review); the review finds the payment suspicious; or the review clears it but a holder name or country is missing, or the currency is not `SCREENING_RULE_CURRENCY` | stays HELD for an officer |
+| `CLEAR` | the review clears it, screening was complete and the currency is the rule currency (an amount-rule hit alone does not block it) | released |
+| `ERROR` | the request is invalid, its key does not match `paymentId`, the rules could not run, or the review failed or ran past the deadline | stays HELD for an officer |
+
+The worker never sends `REJECT`; only an officer rejects a payment. Holder names are used only for sanctions screening. Rules and the review see account ids, and the worker's log lines carry nothing from the request.
+
+**An ERROR is final for that request.** Each verdict is stored in the audit log under the request's `eventId` before it is published, and a redelivered request gets the stored verdict back unchanged. A payment whose review failed therefore stays HELD for an officer and is not retried automatically. Only a new request, with a new `eventId`, is screened again.
+
+Delivery is at-least-once. The offset is committed only after the broker confirms the verdict. If the worker stops between publishing and committing, the request comes back and the same bytes are published again. The verdict `eventId` is a UUID5 of the request `eventId`. If the audit log cannot be written, nothing is published and the worker stops. The worker waits and retries while the topics do not exist yet (they are created when the payment service starts with screening on), and it finishes the current request before exiting on Ctrl+C or SIGTERM.
+
+Things to know when running it:
+
+- **A first run replays the whole topic.** A new consumer group starts from the earliest offset, and every old request is screened again, at the cost of model calls. For tests, use a fresh topic or a throwaway `SCREENING_GROUP_ID`, not one that already holds real requests.
+- **Dedupe lives in the audit DB file.** It depends on the file at `AUDIT_DB_PATH`. A worker pointed at another file, or one that was deleted, screens redelivered requests again. The payment service still applies only the first verdict for each `(paymentId, eventId)`.
+- **A replay must match exactly.** A verdict is replayed only when the body and key are identical to the original message. A reused `eventId` with a changed body or a different key gets its own ERROR with its own `eventId`. A message with no key counts as a key mismatch.
+- **Unusable names and countries count as missing.** A holder name that normalises to nothing (e.g. `"Ltd"`) is treated as missing, and so is a country code that is not a recognised ISO code (e.g. `XX`).
+- **Unaddressable messages get no verdict.** A message with no usable `paymentId` in the body or the key is logged and committed, and nothing is published. The payment stays HELD, and the payment service marks it overdue.
+- **The audit log keeps raw values.** It stores the raw `paymentId` and the review's rationale as received. The published reasons are scrubbed and escaped; the audit copy is not.
+
+Settings (environment or `.env`):
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `SCREENING_BOOTSTRAP_SERVERS` | `localhost:9094` | Kafka brokers (the payment service's compose stack, from the host) |
+| `SCREENING_GROUP_ID` | `fraud-auditor-screening` | consumer group |
+| `SCREENING_DEADLINE_SECONDS` | `300` | a review still running after this is answered with ERROR |
+| `SCREENING_RULE_CURRENCY` | `USD` | the currency `REPORTING_THRESHOLD` and `STRUCTURING_FLOOR` are written in |
+
+The worker also uses the model provider settings, `QDRANT_URL` and `AUDIT_DB_PATH` described above. It requires `REVIEW_MODE=fixed` and a real `data/sanctions_list.csv`, and it does not start without either. One request is screened at a time.
+
+Each request writes one JSON log line: event id, a hash of the payment id, verdict, rule ids, whether the model reviewed it, model seconds, and milliseconds from `createdAt` to `decidedAt`. Every 50 verdicts, and on exit, a summary line gives the counts and p50/p95 latencies. The audit log row for each verdict keeps the same figures. `scripts/screening_e2e.py` is an optional check against the live stack. It needs the payment service, a running worker and provider credentials, and it costs model calls.
+
 ## Running tests and the evaluation
 
 `requirements-dev.txt` is enough for the tests and the evaluation; it includes `langchain-core` and `pydantic` for the prompt-injection tests but skips the model providers and the UI libraries.

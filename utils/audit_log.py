@@ -53,7 +53,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_time ON audit_events(occurred_at);
 # written, the action must not proceed, so record() raises instead of logging
 # and carrying on.
 COMPLIANCE_STAGES = frozenset(
-    {"tier2_assessment", "human_review", "sar_drafted", "sanctions_hit"}
+    {"tier2_assessment", "human_review", "sar_drafted", "sanctions_hit", "screening_verdict"}
 )
 
 
